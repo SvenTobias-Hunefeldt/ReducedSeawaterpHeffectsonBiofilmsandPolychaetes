@@ -1,0 +1,21 @@
+﻿#SampleID,BarcodeSequence,LinkerPrimerSequence,BarcodePlate,Well,Sample_Description,Sample_Type,Project,Library Type,Description,origin sample,pH treatment,age slide (months),% selective settlement (on slides),% total settlement,wet weight per slide (mg),Source
+Nadx18x1,CTACACAGCACA,CATGATCCTTCTGCAGGTTCACCTAC,3,G9,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x1,Tank room,8.1,0,,,,Ambient
+Nadx18x10,TGTACCAACCGA,CATGATCCTTCTGCAGGTTCACCTAC,5,F5,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x10,Flow-through,7,14,0,61.43,1452.65,Biofilm
+Nadx18x11,GCATTACTGGAC,CATGATCCTTCTGCAGGTTCACCTAC,4,E8,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x11,Flow-through,7.2,14,42.94,80.16,406.41,Biofilm
+Nadx18x12,AGACATACCGTA,CATGATCCTTCTGCAGGTTCACCTAC,3,H1,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x12,Flow-through,8.1,7,64.6,90.83,143.33,Biofilm
+Nadx18x13,TCAACCCGTGAA,CATGATCCTTCTGCAGGTTCACCTAC,6,A3,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x13,Flow-through,8.1,10,66.41,87.99,179.84,Biofilm
+Nadx18x14,GATCCTCATGCG,CATGATCCTTCTGCAGGTTCACCTAC,3,H2,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x14,Flow-through,8.1,14,70.74,89.33,216.31,Biofilm
+Nadx18x15,TTGGGCCACATA,CATGATCCTTCTGCAGGTTCACCTAC,4,E9,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x15,Flow-through,7.4,14,65.45,96.09,194.71,Biofilm
+Nadx18x16,CACACAAAGTCA,CATGATCCTTCTGCAGGTTCACCTAC,4,E10,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x16,Flow-through,7.4,7,80.19,95.77,157.84,Biofilm
+Nadx18x17,GCCAAGGATAGG,CATGATCCTTCTGCAGGTTCACCTAC,4,E11,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x17,Flow-through,7.4,10,72.95,93.06,201.53,Biofilm
+Nadx18x18,ATTATCGTCCCT,CATGATCCTTCTGCAGGTTCACCTAC,3,H3,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x18,Flow-through,7.7,14,48.89,91.26,198.07,Biofilm
+Nadx18x19,TAGGCTCGTGCT,CATGATCCTTCTGCAGGTTCACCTAC,7,B7,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x19,Flow-through,7.7,10,36.86,86.43,174.55,Biofilm
+Nadx18x2,TTGGTAAAGTGC,CATGATCCTTCTGCAGGTTCACCTAC,4,E5,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x2,Harbour water,8.1,0, -, -,,Ambient
+Nadx18x20,TCTAGCCTGGCA,CATGATCCTTCTGCAGGTTCACCTAC,6,A9,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x20,Flow-through,7.7,7,37.61,90.78,177.97,Biofilm
+Nadx18x3,GTGGTATGGGAG,CATGATCCTTCTGCAGGTTCACCTAC,5,F4,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x3,Flow-through,7.9,14,53.46,91.94,551.56,Biofilm
+Nadx18x4,GAAATGCTACGT,CATGATCCTTCTGCAGGTTCACCTAC,3,G10,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x4,Flow-through,7.9,10,54.97,85.04,473.14,Biofilm
+Nadx18x5,TCTGAGGTTGCC,CATGATCCTTCTGCAGGTTCACCTAC,3,G11,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x5,Flow-through,7.9,7,50.32,91.38,250.56,Biofilm
+Nadx18x6,GATCATTCTCTC,CATGATCCTTCTGCAGGTTCACCTAC,3,G12,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x6,Flow-through,7.2,7,76.98,88.22,371.59,Biofilm
+Nadx18x7,TAACCCGATAGA,CATGATCCTTCTGCAGGTTCACCTAC,6,C5,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x7,Flow-through,7.2,10,66.08,89.85,198.5,Biofilm
+Nadx18x8,AACCGATGTACC,CATGATCCTTCTGCAGGTTCACCTAC,4,E6,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x8,Flow-through,7,10,0,75,973.23,Biofilm
+Nadx18x9,TCGATTGGCCGT,CATGATCCTTCTGCAGGTTCACCTAC,4,E7,MoBio Power soil,genomic DNA,Flowthrough_PML,18S,Nadx18x9,Flow-through,7,7,0,82.96,974.43,Biofilm

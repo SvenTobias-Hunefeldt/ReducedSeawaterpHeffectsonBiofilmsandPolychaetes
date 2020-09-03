@@ -1,0 +1,1919 @@
+---
+title: "16S_Dada2"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#Set up
+Activate packages for data processing
+library(phyloseq)
+library(vegan)
+library(ggplot2)
+```{r Set up environment}
+#Set seed for reproducibility
+set.seed(2)
+
+#Custom colours for easiest viewing of phyla
+Phylum_colour_list <- c("Proteobacteria" = "#CC9900", 
+                        "Bacteroidetes" = "#0066CC",
+                        "Cyanobacteria" = "#990066",
+                        "Planctomycetes" = "#006600",
+                        "Actinobacteria" = "#99FF00",
+                        "Acidobacteria" = "#FF6699",
+                        "Thaumarchaeota" = "#999999",
+                        "Verrucomicrobia" = "#CC6666",
+                        "Rare Taxa (<1%)" = "#339900",
+                        "Arthropoda" = "#CC9900",
+                        "Entoprocta" = "#330033",
+                        "Ochrophyta" = "#0066CC",
+                        "Annelida" = "#99FF99",
+                        "Chlorophyta_ph" = "#CC99CC",
+                        "Ciliophora" = "#FFFF00",
+                        "Dinoflagellata" = "#FF33FF",
+                        "Porifera" = "#66CC99",
+"Platyhelminthes" = "#FFF8DC",
+"Mollusca" = "#99CCCC",
+"Ascomycota" = "#FF6633",
+"Labyrinthulomycota" = "#009966",
+"Amoebozoa" = "#9933CC",
+"Stramenopiles" = "#336666",
+"Cryptophyta" = "#003399",
+"Euglenozoa" = "#000033",
+"Nemertea" = "#00FFFF",
+"Aphelida" = "#333333",
+"Chlorophyta" = "#0033FF")
+
+#Colourblind friendly pallete
+cbbPalette <- c("#000000", #Black
+                "#E69F00", #Orange
+                "#56B4E9", #Blue (light)
+                "#009E73", #Sea green
+                "#CC79A7", #Magenta (light)
+                #"#F0E442", #Yellow
+                "#0072B2", #Blue
+                "#D55E00") #Burnt orange
+
+#Shapes for ggplot2
+Shape_list = c(0, #Hollow square
+               15, #Filled square
+               1, #Hollow circle
+               16, #Filled circle
+               2, #Hollow triangle
+               17, #Filled triangle
+               5, #Hollow diamond
+               23) #Filled diamons
+                
+#Set up position dodge for ggplot2
+pd = position_dodge(0.15)
+
+#Define theme for plotting
+My_Theme = theme(axis.title.x = element_text(size=18),
+       # theme_grey(base_size = 22),
+        axis.text.x = element_text(angle=0, colour = "black", vjust=1, hjust = 0.5, size=18), 
+        axis.text.y = element_text(colour = "black", size=18),
+        axis.title.y = element_text(face="bold",size=18),
+        plot.title = element_text(size = 18),
+        legend.title =element_text(size = 18),
+        legend.text = element_text(size = 16),
+        legend.position="right",
+        legend.key.size = unit(1, "cm"),
+        strip.text.x = element_text(size=18, face="bold"),
+        strip.text.y = element_text(size=18, face="bold"),
+        #panel.background = element_blank(),
+        panel.border = element_rect(fill = NA, colour = "black"),
+        strip.background = element_rect(colour="black"))
+
+```
+```{r Rarification curve function}
+
+#Rarefaction function from https://github.com/joey711/phyloseq/issues/143
+
+calculate_rarefaction_curves <- function(psdata, measures, depths) {
+  require('plyr') # ldply
+  require('reshape2') # melt
+
+  estimate_rarified_richness <- function(psdata, measures, depth) {
+    if(max(sample_sums(psdata)) < depth) return()
+    psdata <- prune_samples(sample_sums(psdata) >= depth, psdata)
+
+    rarified_psdata <- rarefy_even_depth(psdata, depth, verbose = FALSE)
+
+    alpha_diversity <- estimate_richness(rarified_psdata, measures = measures)
+
+    # as.matrix forces the use of melt.array, which includes the Sample names (rownames)
+    molten_alpha_diversity <- melt(as.matrix(alpha_diversity), varnames = c('Sample', 'Measure'), value.name = 'Alpha_diversity')
+
+    molten_alpha_diversity
+  }
+
+  names(depths) <- depths # this enables automatic addition of the Depth to the output by ldply
+  rarefaction_curve_data <- ldply(depths, estimate_rarified_richness, psdata = psdata, measures = measures, .id = 'Depth', .progress = ifelse(interactive(), 'text', 'none'))
+
+  # convert Depth from factor to numeric
+  rarefaction_curve_data$Depth <- as.numeric(levels(rarefaction_curve_data$Depth))[rarefaction_curve_data$Depth]
+
+  rarefaction_curve_data
+}
+
+```
+```{r Merge low abundance commuity function}
+#A function that merges low abundance taxonomic ranks based on a threshold, based on https://github.com/joey711/phyloseq/issues/1004
+merge_low_abundance <- function(pobject, threshold=0.01){
+transformed <- transform_sample_counts(pobject, function(x) x/sum(x))
+otu.table <- as.data.frame(otu_table(transformed))
+otu.list <- row.names(otu.table[rowMeans(otu.table) < threshold,])
+merged <- merge_taxa(transformed, otu.list, 1)
+for (i in 1:dim(tax_table(merged))[1]){
+if (is.na(tax_table(merged)[i,2])){
+taxa_names(merged)[i] <- "Other"
+tax_table(merged)[i,1:7] <- "Other"}
+}
+return(merged)
+}
+```
+#Import and clean 16S data
+```{r Import 16S phyloseq object}
+
+setwd("/Volumes/Lab_book/Side_projects/Nadjejda_project/DADA2_16S/")#Set working directory
+my_16S_phyloseq = readRDS("Phyloseq_object.rds")#Import phyloseq file generated via the dada2 pipeline
+
+```
+##Subset to my project
+```{r Subset 16S data to specified project}
+my_16S_phyloseq@sam_data #Make sure the metadata matches up properly with what is expected - sanity check
+
+Biofilm_16S = subset_samples(my_16S_phyloseq, Project == "Flowthrough_PML") #Subset data to the relevant project
+
+Mod_16S_map = read.csv("16S_Mapping_NEV.csv", row.names = 1) #Import the updated mapping file that carries more information on the samples
+sample_data(Biofilm_16S) = Mod_16S_map #Update phyloseq object with new metadata
+
+Phyloseq_Biofilm_16S_v1 = Biofilm_16S #Keep old version for record
+Phyloseq_Biofilm_16S = Biofilm_16S #Rename for ease
+```
+##Compare sequences per sample or OTU
+```{r Compare sequences per sample or OTU}
+readsumsdf = data.frame(nreads = sort(taxa_sums(Phyloseq_Biofilm_16S),TRUE), sorted = 1:ntaxa(Biofilm_16S), type = "OTU")
+readsumsdf = rbind(readsumsdf,data.frame(nreads = sort(sample_sums(Phyloseq_Biofilm_16S),TRUE),sorted = 1:nsamples(Phyloseq_Biofilm_16S), type = "Samples"))
+
+title = "Total number of reads"
+
+p = ggplot(readsumsdf, aes(x = sorted, y = nreads)) +
+  geom_bar(stat = "identity")
+
+p + ggtitle(title) +
+  scale_y_log10() +
+  facet_wrap(~type, 1, scales = "free")
+
+```
+##Rarefaction curve
+```{r}
+#Use function to calculate curve
+rarefaction_curve_data_16S <- calculate_rarefaction_curves(Phyloseq_Biofilm_16S, c('Observed'), rep(c(1, 10, 100, 1:100 * 1000), each = 10))
+#Summarise 
+summary(rarefaction_curve_data_16S)
+
+#Reformat data and summarise for plotting
+rarefaction_curve_data_summary_16S <- ddply(rarefaction_curve_data_16S, c('Depth', 'Sample', 'Measure'), summarise, Alpha_diversity_mean = mean(Alpha_diversity), Alpha_diversity_sd = sd(Alpha_diversity))
+
+#Remove X from column and sample names to make reading easier
+colnames(rarefaction_curve_data_summary_16S) = gsub("X","", colnames(rarefaction_curve_data_summary_16S))
+rarefaction_curve_data_summary_16S$Sample = gsub("X","", rarefaction_curve_data_summary_16S$Sample)
+
+#Merge phyloseq metadata and the rarefaction summary
+rarefaction_curve_data_summary_verbose_16S <- merge(rarefaction_curve_data_summary_16S, data.frame(sample_data(Phyloseq_Biofilm_16S))
+                                                , by.x = 'Sample'
+                                                , by.y = 'row.names'
+                                                )
+
+#Make plot
+Rarecurve_16S = ggplot(data = rarefaction_curve_data_summary_verbose_16S,
+  mapping = aes(x = Depth,
+                y = Alpha_diversity_mean,
+                ymin = Alpha_diversity_mean - Alpha_diversity_sd,
+                ymax = Alpha_diversity_mean + Alpha_diversity_sd,
+    colour = as.factor(age.slide..months.),
+    group = Sample)) + 
+    geom_line(size = 0.8) + 
+  scale_color_manual(values = cbbPalette, breaks = c("0", "7", "14", "19", "28", "42", "56"))+
+  ylab("Mean Sample Observed Richness")+
+  xlab("Tested sequencing depth")+
+  labs(colour = "Time (days)")+
+  theme_bw()+
+  My_Theme+
+  facet_grid(. ~ "Prokaryotes")+
+  geom_line(aes(x = min(sample_sums(Phyloseq_Biofilm_16S)), colour = ""))
+
+#Display plot
+Rarecurve_16S
+
+#Save plot object for later ggarrange activity
+pdf("16S_RareficationCurve.pdf", height = 6, width = 8)
+Rarecurve_16S
+dev.off()
+
+```
+##rarefy 10 times, combine, and then utilise the averaged result
+```{r Create average result for multiple rarefaction by transforming data using (divide by 10), results='markup'}
+#Identify the lowest number of reads associated with a single sample
+min(sample_sums(Phyloseq_Biofilm_16S))
+#Rarefy samples to an even depth
+Biofilm_ra_all = rarefy_even_depth(Phyloseq_Biofilm_16S, sample.size = min(18300))
+for (i in 1:9){
+
+Biofilm_ra = rarefy_even_depth(Phyloseq_Biofilm_16S, sample.size = min(18300))  
+  Object = get(paste0("Biofilm_ra"))
+    
+    Biofilm_ra_all = merge_phyloseq(Biofilm_ra_all, Object)
+  i = i+1  
+}
+
+sample_sums(Biofilm_ra_all) #Check how many sequences remain
+Biofilm_16S = transform_sample_counts(Biofilm_ra_all, function(x) x/10) #Reduce number of sequences to non-inflated amount again
+sample_sums(Biofilm_16S) #Check how many sequences remain (should be even numbers)
+
+# Round and confirm count number
+Biofilm_16S = transform_sample_counts(Biofilm_16S, round)
+sample_sums(Biofilm_16S)
+Biofilm_16S = prune_samples(sample_sums(Biofilm_16S)>=1, Biofilm_16S) #Remove samples with less than one read
+sample_sums(Biofilm_16S)
+
+
+```
+##Identify and prune taxa with less than 1 count and check taxa numbers again
+```{r  Save original file and create new file with only present (no zeroes) taxa, results='markup', echo=TRUE}
+
+# Identify taxa with only zeros, results='markup', echo=TRUE
+sum(taxa_sums(Biofilm_16S) > 0)
+any(taxa_sums(Biofilm_16S) == 0)
+sum(taxa_sums(Biofilm_16S) == 0)
+any(taxa_sums(Biofilm_16S) > 1)
+sum(taxa_sums(Biofilm_16S) > 1)
+any(taxa_sums(Biofilm_16S) < 1)
+sum(taxa_sums(Biofilm_16S) < 1)
+
+#Create new file with only present (no zeroes) taxa
+Biofilm_16S = prune_taxa(taxa_sums(Biofilm_16S) > 1, Biofilm_16S)
+#Sanity checks
+any(sample_sums(Biofilm_16S) == 0)
+any(sample_sums(Biofilm_16S) > 0)
+sum(taxa_sums(Biofilm_16S) > 0)
+any(sample_sums(Biofilm_16S) < 1)
+sum(taxa_sums(Biofilm_16S) < 1)
+```
+##Compare sequences per sample or OTU
+```{r Compare sequences per sample or OTU}
+readsumsdf = data.frame(nreads = sort(taxa_sums(Biofilm_16S),TRUE), sorted = 1:ntaxa(Biofilm_16S), type = "OTU")
+readsumsdf = rbind(readsumsdf,data.frame(nreads = sort(sample_sums(Biofilm_16S),TRUE),sorted = 1:nsamples(Biofilm_16S), type = "Samples"))
+
+title = "Total number of reads"
+
+p = ggplot(readsumsdf, aes(x = sorted, y = nreads)) +
+  geom_bar(stat = "identity")
+
+p + ggtitle(title) +
+  scale_y_log10() +
+  facet_wrap(~type, 1, scales = "free")
+```
+##Check Variables
+```{r What sample variables exist in the phyloseq data}
+sample_variables(Biofilm_16S)
+```
+```{r Attach OTU IDs}
+tax_table(Biofilm_16S) <- cbind(tax_table(Biofilm_16S), OTU=taxa_names(Biofilm_16S))
+```
+##Resubset and check what samples remain after rarefaction
+```{r}
+Nad_phyloseq_16S = Biofilm_16S
+Nad_phyloseq_16S@sam_data
+```
+#Import and clean 18S data
+```{r Import 18S phyloseq object}
+
+setwd("/Volumes/Lab_book/Side_projects/Nadjejda_project/DADA2_18S/")#Set working directory
+my_18S_phyloseq = readRDS("Phyloseq_object.rds") #Import phyloseq file generated via the dada2 pipeline
+my_18S_phyloseq = subset_taxa(my_18S_phyloseq, Kingdom == "Eukaryota") #Subset phyloseq object to use only taxa classified as eukaryotes, ass 18S primers can also capture prokaryotic organisms.
+
+```
+##Subset to my project
+```{r}
+my_18S_phyloseq@sam_data #Make sure the metadata matches up properly with what is expected - sanity check
+
+Biofilm_18S = subset_samples(my_18S_phyloseq, Project == "Flowthrough_PML") #Subset data to the relevant project
+
+Mod_18S_map = read.csv("18S_Mapping_NEV.csv", row.names = 1) #Import the updated mapping file that carries more information on the samples
+sample_data(Biofilm_18S) = Mod_18S_map #Update phyloseq object with new metadata
+
+Phyloseq_Biofilm_18S_v1 = Biofilm_18S #Keep old version for record
+Phyloseq_Biofilm_18S = Biofilm_18S #Rename for ease
+```
+##Compare sequences per sample or OTU
+```{r Compare sequences per sample or OTU}
+readsumsdf = data.frame(nreads = sort(taxa_sums(Phyloseq_Biofilm_18S),TRUE), sorted = 1:ntaxa(Biofilm_18S), type = "OTU")
+readsumsdf = rbind(readsumsdf,data.frame(nreads = sort(sample_sums(Phyloseq_Biofilm_18S),TRUE),sorted = 1:nsamples(Phyloseq_Biofilm_18S), type = "Samples"))
+
+title = "Total number of reads"
+
+p = ggplot(readsumsdf, aes(x = sorted, y = nreads)) +
+  geom_bar(stat = "identity")
+
+p + ggtitle(title) +
+  scale_y_log10() +
+  facet_wrap(~type, 1, scales = "free")
+
+```
+##Rarefaction curve
+```{r}
+#Use function to calculate curve
+rarefaction_curve_data_18S <- calculate_rarefaction_curves(Phyloseq_Biofilm_18S, c('Observed'), rep(c(1, 10, 100, 1:100 * 1000), each = 10))
+#Summarise 
+summary(rarefaction_curve_data_18S)
+
+#Reformat data and summarise for plotting
+rarefaction_curve_data_summary_18S <- ddply(rarefaction_curve_data_18S, c('Depth', 'Sample', 'Measure'), summarise, Alpha_diversity_mean = mean(Alpha_diversity), Alpha_diversity_sd = sd(Alpha_diversity))
+
+#Remove X from column and sample names to make reading easier
+colnames(rarefaction_curve_data_summary_18S) = gsub("X","", colnames(rarefaction_curve_data_summary_18S))
+rarefaction_curve_data_summary_18S$Sample = gsub("X","", rarefaction_curve_data_summary_18S$Sample)
+
+#Merge phyloseq metadata and the rarefaction summary
+rarefaction_curve_data_summary_verbose_18S <- merge(rarefaction_curve_data_summary_18S, data.frame(sample_data(Phyloseq_Biofilm_18S))
+                                                , by.x = 'Sample'
+                                                , by.y = 'row.names'
+                                                )
+
+#Make plot
+Rarecurve_18S = ggplot(data = rarefaction_curve_data_summary_verbose_18S,
+  mapping = aes(x = Depth,
+                y = Alpha_diversity_mean,
+                ymin = Alpha_diversity_mean - Alpha_diversity_sd,
+                ymax = Alpha_diversity_mean + Alpha_diversity_sd,
+    colour = as.factor(age.slide..months.),
+    group = Sample)) + 
+    geom_line(size = 0.8) +
+  scale_color_manual(values = cbbPalette, breaks = c("0", "7", "14"))+
+  ylab("Mean Sample Observed Richness")+
+  xlab("Tested sequencing depth")+
+  labs(colour = "Time (days)")+
+  theme_bw()+
+  My_Theme+
+  facet_grid(. ~ "Eukaryotes")+
+  geom_line(aes(x = min(15000), colour = ""))
+
+#Display plot
+Rarecurve_18S
+
+#Save plot object for later ggarrange activity
+pdf("18S_RareficationCurve.pdf", height = 6, width = 8)
+Rarecurve_18S
+dev.off()
+
+```
+##rarefy 10 times, combine, and then utilise the averaged result
+```{r Create average result for multiple rarefaction by transforming data using (divide by 10), results='markup'}
+min(sample_sums(Phyloseq_Biofilm_18S))
+#Rarefy samples to an even depth
+Biofilm_ra_all = rarefy_even_depth(Phyloseq_Biofilm_18S, sample.size = min(5000))
+for (i in 1:9){
+
+Biofilm_ra = rarefy_even_depth(Phyloseq_Biofilm_18S, sample.size = min(5000))  
+  Object = get(paste0("Biofilm_ra"))
+    
+    Biofilm_ra_all = merge_phyloseq(Biofilm_ra_all, Object)
+  i = i+1  
+}
+
+sample_sums(Biofilm_ra_all) #Check how many sequences remain
+Biofilm_18S = transform_sample_counts(Biofilm_ra_all, function(x) x/10) #Reduce number of sequences to non-inflated amount again
+sample_sums(Biofilm_18S) #Check how many sequences remain (should be even numbers)
+
+# Round and confirm count number
+Biofilm_18S = transform_sample_counts(Biofilm_18S, round)
+sample_sums(Biofilm_18S)
+Biofilm_18S = prune_samples(sample_sums(Biofilm_18S)>=1, Biofilm_18S)  #Remove samples with less than one read
+sample_sums(Biofilm_18S)
+
+
+```
+##Identify and prune taxa with less than 1 count and check taxa numbers again
+```{r  Save original file and create new file with only present (no zeroes) taxa, results='markup', echo=TRUE}
+
+# Identify taxa with only zeros, results='markup', echo=TRUE
+sum(taxa_sums(Biofilm_18S) > 0)
+any(taxa_sums(Biofilm_18S) == 0)
+sum(taxa_sums(Biofilm_18S) == 0)
+any(taxa_sums(Biofilm_18S) > 1)
+sum(taxa_sums(Biofilm_18S) > 1)
+any(taxa_sums(Biofilm_18S) < 1)
+sum(taxa_sums(Biofilm_18S) < 1)
+
+#Create new file with only present (no zeroes) taxa
+Biofilm_18S = prune_taxa(taxa_sums(Biofilm_18S) > 1, Biofilm_18S)
+#Sanity checks
+any(sample_sums(Biofilm_18S) == 0)
+any(sample_sums(Biofilm_18S) > 0)
+sum(taxa_sums(Biofilm_18S) > 0)
+any(sample_sums(Biofilm_18S) < 1)
+sum(taxa_sums(Biofilm_18S) < 1)
+
+```
+##Compare sequences per sample or OTU
+```{r Compare sequences per sample or OTU}
+readsumsdf = data.frame(nreads = sort(taxa_sums(Biofilm_18S),TRUE), sorted = 1:ntaxa(Biofilm_18S), type = "OTU")
+readsumsdf = rbind(readsumsdf,data.frame(nreads = sort(sample_sums(Biofilm_18S),TRUE),sorted = 1:nsamples(Biofilm_18S), type = "Samples"))
+
+title = "Total number of reads"
+
+p = ggplot(readsumsdf, aes(x = sorted, y = nreads)) +
+  geom_bar(stat = "identity")
+
+p + ggtitle(title) +
+  scale_y_log10() +
+  facet_wrap(~type, 1, scales = "free")
+```
+##Check Variables
+```{r What sample variables exist in the phyloseq data}
+sample_variables(Biofilm_18S)
+```
+```{r Attach OTU IDs}
+tax_table(Biofilm_18S) <- cbind(tax_table(Biofilm_18S), OTU=taxa_names(Biofilm_18S))
+```
+##Resubset and check what samples remain after rarefaction
+```{r}
+Nad_phyloseq_18S = Biofilm_18S
+Nad_phyloseq_18S@sam_data
+```
+
+#Beta-diversity
+Activate these packages for downstream processing
+library(phyloseq)
+library(vegan)
+library(ggplot2)
+library(ggpubr)
+##Prokaryotes
+```{r 16S Beta diversity}
+#Rename for ease of use and to keep old version intact for downstream use
+Beta_specific_phyloseq = Nad_phyloseq_16S
+#Rename ambient measurement to "amb" for specificity
+Beta_specific_phyloseq@sam_data$pH.treatment = gsub("8.1", "amb", Beta_specific_phyloseq@sam_data$pH.treatment)
+#Subset samples to biofilm specific communities
+Biofilm_16S = subset_samples(Beta_specific_phyloseq, Source == "Biofilm")
+NMDS.ord_16S <- ordinate(Biofilm_16S, method = "NMDS", distance = "bray") #Calculate ordination
+
+#Assess ordination stress
+stressplot(NMDS.ord_16S)
+NMDS.ord_16S #0.1088272
+
+#Change data type for easier visualisation
+sample_data(Biofilm_16S)$pH.treatment<-as.factor(sample_data(Biofilm_16S)$pH.treatment)
+sample_data(Biofilm_16S)$age.slide..months.<-as.factor(sample_data(Biofilm_16S)$age.slide..months.)
+
+#Make plot
+NMDS_16S = plot_ordination(Beta_specific_phyloseq, 
+                           NMDS.ord_16S, 
+                           shape = ("age.slide..months."), 
+                           color = ("pH.treatment")
+                             ) + 
+  geom_point(aes(size = 5))+
+  annotate("text", 
+           x=-1.3, 
+           y= 0.7, 
+           size = 5, 
+           label= paste0("Stress = ", round(NMDS.ord_16S$stress, digits = 3)))+
+  scale_colour_manual("pH treatment", values = cbbPalette)+
+  guides(colour = guide_legend(order = 2, 
+                               override.aes = list(size = 4),
+                               nrow = 1),
+         shape = guide_legend(title = "Biofilm age (months)",
+                              order = 1, 
+                              override.aes = list(size = 4),
+                              nrow = 1),
+         size = F)+
+  theme_bw()+
+  My_Theme+
+  theme(legend.position = "top")
+#Display plot
+NMDS_16S
+#Save plot
+pdf("16S_NMDS_withoutAmbient.pdf", width = 8, height = 6)
+NMDS_16S
+dev.off()
+#Save plot object for record keeping
+saveRDS(NMDS_16S, file = "16S_NMDS.rds")
+
+```
+##Eukaryotes
+```{r 18S Beta diversity}
+#Rename for ease of use and to keep old version intact for downstream use
+Beta_specific_phyloseq = Nad_phyloseq_18S
+#Rename ambient measurement to "amb" for specificity
+Beta_specific_phyloseq@sam_data$pH.treatment = gsub("8.1", "amb", Beta_specific_phyloseq@sam_data$pH.treatment)
+#Subset samples to biofilm specific communities
+Biofilm_18S = subset_samples(Beta_specific_phyloseq, Source == "Biofilm")
+NMDS.ord_18S <- ordinate(Biofilm_18S, method = "NMDS", distance = "bray") #Calculate ordination
+
+#Assess ordination stress
+stressplot(NMDS.ord_18S) 
+NMDS.ord_18S #0.1082393
+
+#Change data type for easier visualisation
+sample_data(Beta_specific_phyloseq)$pH.treatment<-as.factor(sample_data(Beta_specific_phyloseq)$pH.treatment)
+sample_data(Beta_specific_phyloseq)$age.slide..months.<-as.factor(sample_data(Beta_specific_phyloseq)$age.slide..months.)
+
+#Make plot
+NMDS_18S = plot_ordination(Beta_specific_phyloseq, 
+                           NMDS.ord_18S, 
+                           shape = ("age.slide..months."), 
+                           color = ("pH.treatment")
+                             ) + 
+  geom_point(aes(size = 5))+
+  annotate("text", 
+           x=-1.15, 
+           y= 0.75, 
+           size = 5, 
+           label= paste0("Stress = ", round(NMDS.ord_18S$stress, digits = 3)))+
+  scale_colour_manual("pH treatment", values = cbbPalette)+
+  guides(colour = guide_legend(order = 2, 
+                               override.aes = list(size = 4),
+                               nrow = 1),
+         shape = guide_legend(title = "Biofilm age (months)",
+                              order = 1, 
+                              override.aes = list(size = 4),
+                              nrow = 1),
+         size = F)+
+  theme_bw()+
+  My_Theme+
+  theme(legend.position = "top")
+
+#Display plot
+NMDS_18S
+#Save plot
+pdf("18S_NMDS_withoutAmbient.pdf", width = 8, height = 6)
+NMDS_18S
+dev.off()
+#Save plot object for record keeping
+saveRDS(NMDS_18S, file = "18S_NMDS.rds")
+
+```
+##Combine both into figure
+```{r Legend at top}
+#Read objects into R environment again
+NMDS_16S_reup = readRDS("~/Desktop/Nadjejda_project/DADA2_16S/16S_NMDS.rds")
+NMDS_18S_reup = readRDS("~/Desktop/Nadjejda_project/DADA2_18S/18S_NMDS.rds")
+
+#Combine into figure
+NMDSFigure = ggarrange(NMDS_16S_reup, NMDS_18S_reup,
+                 common.legend = T,
+                 labels = "AUTO",
+                 legend = "top")
+NMDSFigure #Inspect figure
+
+#Save figure
+pdf("~/Desktop/Nadjejda_project/Redone_NMDStop.pdf", height = 8, width = 16)
+NMDSFigure
+dev.off()
+
+```
+#Phylum level stacked bar plots
+Activate the required packages for downstream analysis
+library(dplyr)
+library(forcats)
+library(ggpubr)
+##Prokaryotes
+```{r}
+#Make a dataframe that displays relative abundance at the phylum level
+dat_2fold_FDR_16S <- tax_glom(Nad_phyloseq_16S, taxrank = 'Phylum') %>% #Merge the species at the Phylum level
+  transform_sample_counts(fun = function(x) {x/sum(x)} ) %>% #Extract abundance data from phyloseq object
+  psmelt() #Melt it into a dataframe
+
+dat_2fold_FDR_16S <- dat_2fold_FDR_16S[order(dat_2fold_FDR_16S$Phylum),] #Order rows at the Phylum level
+
+dat_2fold_FDR_16S$Phylum <- as.character(dat_2fold_FDR_16S$Phylum) #Group dataframe by Phylum, calculate relative abundance
+
+medians_16S <- ddply(dat_2fold_FDR_16S, ~Phylum, function(x) c(median=mean(x$Abundance))) #Find Phylum whose rel. abund. is less than 1%
+remainder_16S <- medians_16S[medians_16S$median <= 0.01,]$Phylum #Change their name to "Remainder"
+
+#Calculate mean relative abundance
+Summary_16S <- summarySE(dat_2fold_FDR_16S, measurevar="Abundance", groupvars=c("Kingdom", 
+                                                                                "Phylum",
+                                                                                "pH.treatment",
+                                                                                "age.slide..months.",
+                                                                                "X..selective.settlement..on.slides.")) #Keep these variables in this order
+#Make sure it worked
+dim(Summary_16S)
+Summary_16S 
+
+#Rename taxa making up below 1% of the total relative abudance to "Rare taxa (<1%)"
+Summary_16S[Summary_16S$Phylum %in% remainder_16S,]$Phylum <- 'Rare Taxa (<1%)'
+Summary_16S #Make sure it worked
+Summary_16S = subset(Summary_16S, !age.slide..months. == "0") #Remove non-relevant samples
+
+Summary_16S<-dplyr::arrange(Summary_16S,Phylum, Abundance, X..selective.settlement..on.slides.) #Rearrange for ease of reading
+
+Summary_16S$Phylum <- factor(Summary_16S$Phylum,
+                         levels=(unique(Summary_16S$Phylum))) #Ensure each phyla is unique
+#write.csv(Summary_16S, "Summary_16S_Phylum.csv") #Keep dataframe for record keeping
+####Plotting####
+#Make plot
+Summary_16S_plot_Phylum <-ggplot(Summary_16S)+ 
+  geom_bar(aes(x=as.factor(pH.treatment), 
+                            y=Abundance*100, 
+                           fill = fct_reorder(Phylum, Abundance, .fun = mean, .desc = T),
+                           group = fct_reorder(Phylum, Abundance, .fun = mean, .desc = T)
+                           ),
+           stat = "identity") +
+  theme_bw()+
+  theme(legend.position = "right", 
+        strip.background = element_blank())+
+  scale_fill_manual("Prokaryotic phyla", values = Phylum_colour_list)+
+ xlab("pH")+
+   ylab("Mean relative abundance (%)")+
+  labs(fill = "Prokaryotic phyla")+
+      facet_wrap(~age.slide..months., ncol = 1)
+#Display plot
+Summary_16S_plot_Phylum
+#Save plot
+pdf("Actual_Whole_community_phyla_16S.pdf", height = 6, width = 8)
+Summary_16S_plot_Phylum
+dev.off()
+#Keep dataframe for records
+write.csv(Summary_16S, "/Volumes/Lab_book/Side_projects/Nadjejda_project/SummaryTaxa_16S.csv")
+
+```
+
+##Eukaryotes
+```{r}
+#Make a dataframe that displays relative abundance at the phylum level
+dat_2fold_FDR_18S <- tax_glom(Nad_phyloseq_18S, taxrank = 'Phylum') %>% #Merge the species at the Phylum level
+  #merge_low_abundance() %>% #Merge taxa with abundance below 1%
+  transform_sample_counts(fun = function(x) {x/sum(x)} ) %>% #Extract abundance data from phyloseq object
+  psmelt() #Melt it into a dataframe
+
+dat_2fold_FDR_18S <- dat_2fold_FDR_18S[order(dat_2fold_FDR_18S$Phylum),] #Order them at the Phylum level
+
+dat_2fold_FDR_18S$Phylum <- as.character(dat_2fold_FDR_18S$Phylum) #Group dataframe by Phylum, calculate relative abundance
+
+medians_18S <- ddply(dat_2fold_FDR_18S, ~Phylum, function(x) c(median=mean(x$Abundance))) #Find Phylum whose rel. abund. is less than 1%
+remainder_18S <- medians_18S[medians_18S$median <= 0.01,]$Phylum #Change their name to "Remainder"
+
+#Calculate mean relative abundance
+Summary_18S <- summarySE(dat_2fold_FDR_18S, measurevar="Abundance", groupvars=c("Kingdom", 
+                                                                                "Phylum",
+                                                                                #"Class", 
+                                                                                #"Order", 
+                                                                                #"Family", 
+                                                                                #"Genus", 
+                                                                                "pH.treatment",
+                                                                                "age.slide..months.",
+                                                                            "X..selective.settlement..on.slides.")) #Keep these variables in this order
+#Make sure it worked
+dim(Summary_18S)
+Summary_18S 
+
+#Rename taxa making up below 1% of the total relative abudance to "Rare taxa (<1%)"
+Summary_18S[Summary_18S$Phylum %in% remainder_18S,]$Phylum <- 'Rare Taxa (<1%)'
+Summary_18S #Make sure it worked
+Summary_18S = subset(Summary_18S, !age.slide..months. == "0") #Remove non-relevant samples
+
+Summary_18S<-dplyr::arrange(Summary_18S,Phylum, Abundance, X..selective.settlement..on.slides.) #Rearrange for ease of reading
+
+Summary_18S$Phylum <- factor(Summary_18S$Phylum,
+                         levels=(unique(Summary_18S$Phylum))) #Ensure each phyla is unique
+#write.csv(Summary_18S, "Summary_18S_Phylum.csv") #Keep for records
+####Plotting####
+#Rename ambient pH for specificity
+Summary_18S$pH.treatment = gsub("8.1", "amb", Summary_18S$pH.treatment)
+#Make plot
+Summary_18S_plot_Phylum <-ggplot(Summary_18S)+ 
+  geom_bar(aes(x=as.factor(pH.treatment), 
+                            y=Abundance*100, 
+                           fill = fct_reorder(Phylum, Abundance, .fun = mean, .desc = T),
+                           group = fct_reorder(Phylum, Abundance, .fun = mean, .desc = T)
+                           ),
+           stat = "identity") +
+  theme_bw()+
+  theme(legend.position = "right", 
+        strip.background = element_blank())+
+  scale_fill_manual("Eukaryotic phyla", values = Phylum_colour_list)+
+ xlab("pH")+
+   ylab("Mean relative abundance (%)")+
+  labs(fill = "Eukaryotic phyla")+
+      facet_wrap(~age.slide..months., ncol = 1)
+#Display plot
+Summary_18S_plot_Phylum
+#Save plot
+pdf("Actual_Whole_community_phyla_18S.pdf", height = 6, width = 8)
+Summary_18S_plot_Phylum
+dev.off()
+#Keep dataframe for records
+write.csv(Summary_18S, "/Volumes/Lab_book/Side_projects/Nadjejda_project/SummaryTaxa_18S.csv")
+
+```
+##Combine both into one figure
+```{r Combine phylum specific stacked bar plots into one figure}
+#Make plot
+StackedBarPlot_Figure = ggarrange(Summary_16S_plot_Phylum,
+                                  Summary_18S_plot_Phylum, 
+                                  common.legend = F,
+                                  labels = "AUTO",
+                                  align = "hv")
+#Inspect plot
+StackedBarPlot_Figure
+#Save plot
+pdf("/Volumes/Lab_book/Side_projects/Nadjejda_project/Redone_Taxa.pdf", height = 8, width = 12)
+StackedBarPlot_Figure
+dev.off()
+
+```
+
+#Stats - 16S
+##Mantel test
+###Without Ambient
+```{r Age mantel}
+#Subset samples for relevance
+Biofilm_16S = subset_samples(Nad_phyloseq_16S, Source == "Biofilm")
+
+#16S
+Dist_Comm_16S = phyloseq::distance(Biofilm_16S, method = "bray") #Make community dissimilarity object
+Dist_age_16S = dist(Biofilm_16S@sam_data$age.slide..months.) #Make variable dissimilarity plot
+mantel(Dist_Comm_16S, Dist_age_16S, method = "p", permutations = 999) #Carry out statistical test
+#Age is not a significant factor for distribution
+
+```
+```{r pH mantel}
+#Subset samples for relevance
+Biofilm_16S = subset_samples(Nad_phyloseq_16S, Source == "Biofilm")
+
+#16S
+Dist_Comm_16S = phyloseq::distance(Biofilm_16S, method = "bray") #Make community dissimilarity object
+Dist_pH_16S = dist(Biofilm_16S@sam_data$pH.treatment) #Make variable dissimilarity plot
+mantel(Dist_Comm_16S, Dist_pH_16S, method = "p", permutations = 999) #Carry out statistical test
+#pH is a significant factor for distribution
+
+```
+###With Ambient
+```{r Age mantel}
+
+#16S
+Dist_Comm_16S = phyloseq::distance(Nad_phyloseq_16S, method = "bray") #Make community dissimilarity object
+Dist_age_16S = dist(Nad_phyloseq_16S@sam_data$age.slide..months.) #Make variable dissimilarity plot
+mantel(Dist_Comm_16S, Dist_age_16S, method = "p", permutations = 999) #Carry out statistical test
+#Age is a significant factor for distribution
+
+```
+```{r pH mantel}
+
+#16S
+Dist_Comm_16S = phyloseq::distance(Nad_phyloseq_16S, method = "bray") #Make community dissimilarity object
+Dist_pH_16S = dist(Nad_phyloseq_16S@sam_data$pH.treatment) #Make variable dissimilarity plot
+mantel(Dist_Comm_16S, Dist_pH_16S, method = "p", permutations = 999) #Carry out statistical test
+#pH is not a significant factor for distribution
+
+```
+
+##NMDS derived
+###Age
+```{r 16S NMDS derived stat tests - age}
+####anosim####
+Age_group = get_variable(Biofilm_16S@sam_data, "age.slide..months.") #Extract variable groups
+Age_ano = anosim(phyloseq::distance(Biofilm_16S, method = "bray"), Age_group, distance = "bray") #Carry out statistical test
+Age_ano$signif #0.857
+Age_ano$statistic #-0.0683128
+#No significant differences between group means
+summary(Age_ano)
+####Adonis####
+
+Age_group = get_variable(Biofilm_16S@sam_data, "age.slide..months.") #Extract variable groups
+df_tran = as(Biofilm_16S@sam_data, "data.frame") #Convert metadata to a dataframe
+df_tran.dist = phyloseq::distance(Biofilm_16S, method = "bray") #Make community dissimilarity object
+Depth_ado = adonis(df_tran.dist ~ Age_group) #Carry out statistical test
+Depth_ado
+summary(Depth_ado)
+#No significant differences between group means
+
+```
+###pH
+```{r 16S NMDS derived stat tests - pH}
+####anosim####
+pH_group = get_variable(Biofilm_16S@sam_data, "pH.treatment") #Extract variable groups
+pH_ano = anosim(phyloseq::distance(Biofilm_16S, method = "bray"), pH_group) #Carry out statistical test
+pH_ano$signif #0.001
+pH_ano$statistic #0.9563786
+summary(pH_ano)
+#Significant differences between group means.
+
+####Adonis####
+
+pH_group = get_variable(Biofilm_16S@sam_data, "pH.treatment") #Extract variable groups
+df_tran = as(Biofilm_16S@sam_data, "data.frame") #Convert metadata to a dataframe
+df_tran.dist = phyloseq::distance(Biofilm_16S, method = "bray") #Make community dissimilarity object
+pH_ado = adonis(df_tran.dist ~ pH_group) #Carry out statistical test
+pH_ado
+#Significant differences between group means
+
+```
+
+##Post-hoc for NMDS - adonis based
+library(RVAideMemoire)
+```{r 16S NMDS derived stat tests - age}
+
+####16S####
+Age_group = get_variable(Biofilm_16S@sam_data, "age.slide..months.") #Extract variable groups
+df_tran.dist = phyloseq::distance(Biofilm_16S, method = "bray") #Make community dissimilarity object
+Depth_ado = pairwise.perm.manova(df_tran.dist, Age_group, nperm = 999) #Carry out statistical test
+Depth_ado
+#No significant differences between group means
+
+pH_group = get_variable(Biofilm_16S@sam_data, "pH.treatment") #Extract variable groups
+df_tran.dist = phyloseq::distance(Biofilm_16S, method = "bray") #Make community dissimilarity object
+pH_ado = pairwise.perm.manova(df_tran.dist, pH_group, nperm = 999) #Carry out statistical test
+pH_ado
+#No significant differences between group means
+
+```
+#Stats - 18S
+##Mantel test
+###Without Ambient
+```{r Age mantel}
+#Subset samples for relevance
+Biofilm_18S = subset_samples(Nad_phyloseq_18S, Source == "Biofilm")
+
+#18S
+Dist_Comm_18S = phyloseq::distance(Biofilm_18S, method = "bray") #Make community dissimilarity object
+Dist_age_18S = dist(Biofilm_18S@sam_data$age.slide..months.) #Make variable dissimilarity plot
+mantel(Dist_Comm_18S, Dist_age_18S, method = "p", permutations = 999) #Carry out statistical test
+#Age is not a significant factor for distribution
+
+```
+```{r pH mantel}
+#Subset samples for relevance
+Biofilm_18S = subset_samples(Nad_phyloseq_18S, Source == "Biofilm")
+
+#18S
+Dist_Comm_18S = phyloseq::distance(Biofilm_18S, method = "bray") #Make community dissimilarity object
+Dist_pH_18S = dist(Biofilm_18S@sam_data$pH.treatment) #Make variable dissimilarity plot
+mantel(Dist_Comm_18S, Dist_pH_18S, method = "p", permutations = 999) #Carry out statistical test
+#pH is a significant factor for distribution
+
+```
+##NMDS derived
+###Age
+```{r 18S NMDS derived stat tests - age}
+####anosim####
+Age_group = get_variable(Biofilm_18S@sam_data, "age.slide..months.") #Extract variable groups
+Age_ano = anosim(phyloseq::distance(Biofilm_18S, method = "bray"), Age_group, distance = "bray") #Carry out statistical test
+Age_ano$signif #0.857
+Age_ano$statistic #-0.0683128
+#No significant differences between group means
+summary(Age_ano)
+####Adonis####
+
+Age_group = get_variable(Biofilm_18S@sam_data, "age.slide..months.") #Extract variable groups
+df_tran = as(Biofilm_18S@sam_data, "data.frame") #Convert metadata to a dataframe
+df_tran.dist = phyloseq::distance(Biofilm_18S, method = "bray") #Make community dissimilarity object
+Depth_ado = adonis(df_tran.dist ~ Age_group) #Carry out statistical test
+Depth_ado
+
+#No significant differences between group means
+
+```
+###pH
+```{r 18S NMDS derived stat tests - pH}
+####anosim####
+pH_group = get_variable(Biofilm_18S@sam_data, "pH.treatment") #Extract variable groups
+pH_ano = anosim(phyloseq::distance(Biofilm_18S, method = "bray"), pH_group) #Carry out statistical test
+pH_ano$signif #0.001
+pH_ano$statistic #0.9563786
+summary(pH_ano)
+#Significant differences between group means.
+
+####Adonis####
+
+pH_group = get_variable(Biofilm_18S@sam_data, "pH.treatment") #Extract variable groups
+df_tran = as(Biofilm_18S@sam_data, "data.frame") #Convert metadata to a dataframe
+df_tran.dist = phyloseq::distance(Biofilm_18S, method = "bray") #Make community dissimilarity object
+pH_ado = adonis(df_tran.dist ~ pH_group) #Carry out statistical test
+pH_ado
+#Significant differences between group means
+
+```
+
+#Attic
+##Reads per sample
+```{r}
+sample_sums(my_16S_phyloseq)
+library(data.table)
+library(Rmisc)
+
+TotalRead_Phyloseq = my_16S_phyloseq
+
+sample_data(TotalRead_Phyloseq) = Mod_16S_map
+
+#TotalRead_Phyloseq = subset_samples(TotalRead_Phyloseq, Sample_type == "Biofilm")
+
+sdt = data.table(as(sample_data(TotalRead_Phyloseq), "data.frame"),
+                 TotalReads = sample_sums(TotalRead_Phyloseq), keep.rownames = TRUE)
+
+Total_reads_df = summarySE(sdt, measurevar="TotalReads", groupvars=c("pH.treatment", "age.slide..months."))
+
+ggplot(Total_reads_df, aes(x=age.slide..months., y= TotalReads, color = as.factor(pH.treatment))) + 
+  geom_line() + 
+ # geom_smooth(method = lm) +
+    geom_errorbar(aes(ymin=(TotalReads-se), 
+                    ymax=(TotalReads+se)), 
+                colour="black", 
+                position=pd
+                )+
+  ggtitle("Sequencing Depth vs. Time") +
+  #scale_y_log10() +
+ # facet_grid(Substrate ~ .)
+
+pdf("TotalReads_Time.pdf")
+last_plot()
+dev.off()
+```
+##Alpha diversity
+library(microbiome)
+```{r 16S alpha diversity - pH }
+#Calculate richness
+sample_data(Nad_phyloseq_16S) = Mod_16S_map
+alpha_summary_16S <- estimate_richness(Nad_phyloseq_16S, measures = c("Observed", "Shannon"))
+Evenness_16S <- evenness(Nad_phyloseq_16S, 'pielou')
+alpha_summary_16S$Pielou <- Evenness_16S$pielou
+#combine with metadata
+Map_16S_alpha <- data.frame(alpha_summary_16S, sample_data(Nad_phyloseq_16S))
+sample_data(Nad_phyloseq_16S) = Map_16S_alpha
+Nad_phyloseq_16S@sam_data
+
+ggplot(Map_16S_alpha, aes(x = pH.treatment, y = Observed, group = pH.treatment))+
+  geom_boxplot()+
+  facet_wrap(~Source)
+pdf("16S_Observed_vs_pH.pdf")
+last_plot()
+dev.off()
+
+ggplot(Map_16S_alpha, aes(x = pH.treatment, y = Shannon, group = pH.treatment))+
+  geom_boxplot()+
+  facet_wrap(~Source)
+pdf("16S_Shannon_vs_pH.pdf")
+last_plot()
+dev.off()
+
+ggplot(Map_16S_alpha, aes(x = pH.treatment, y = Pielou, group = pH.treatment))+
+  geom_boxplot()+
+  facet_wrap(~Source)
+pdf("16S_Pielou_vs_pH.pdf")
+last_plot()
+dev.off()
+
+```
+```{r 16S alpha diversity - age }
+ggplot(Map_16S_alpha, aes(x = age.slide..months., y = Observed, group = age.slide..months.))+
+  geom_boxplot()+
+  facet_wrap(~Source)
+pdf("16S_Observed_vs_age.pdf")
+last_plot()
+dev.off()
+
+ggplot(Map_16S_alpha, aes(x = age.slide..months., y = Shannon, group = age.slide..months.))+
+  geom_boxplot()+
+  facet_wrap(~Source)
+pdf("16S_Shannon_vs_age.pdf")
+last_plot()
+dev.off()
+
+ggplot(Map_16S_alpha, aes(x = age.slide..months., y = Pielou, group = age.slide..months.))+
+  geom_boxplot()+
+  facet_wrap(~Source)
+pdf("16S_Pielou_vs_age.pdf")
+last_plot()
+dev.off()
+
+
+```
+```{r 16S alpha diversity - age x pH }
+ggplot(Map_16S_alpha, aes(x = pH.treatment, y = Observed))+
+  geom_line()+
+  facet_wrap(age.slide..months.~Source)
+pdf("16S_Observed_vs_pHandage.pdf")
+last_plot()
+dev.off()
+
+ggplot(Map_16S_alpha, aes(x = pH.treatment, y = Shannon))+
+  geom_line()+
+  facet_wrap(age.slide..months.~Source)
+pdf("16S_Shannon_vs_pHandage.pdf")
+last_plot()
+dev.off()
+
+ggplot(Map_16S_alpha, aes(x = pH.treatment, y = Pielou))+
+  geom_line()+
+  facet_wrap(age.slide..months.~Source)
+pdf("16S_Pielou_vs_pHandage.pdf")
+last_plot()
+dev.off()
+
+
+
+ggplot(Map_16S_alpha, aes(x = age.slide..months., y = Observed))+
+  geom_line()+
+  facet_wrap(pH.treatment~Source)
+pdf("16S_Observed_vs_ageandpH.pdf")
+last_plot()
+dev.off()
+
+ggplot(Map_16S_alpha, aes(x = age.slide..months., y = Shannon))+
+  geom_line()+
+  facet_wrap(pH.treatment~Source)
+pdf("16S_Shannon_vs_ageandpH.pdf")
+last_plot()
+dev.off()
+
+ggplot(Map_16S_alpha, aes(x = age.slide..months., y = Pielou))+
+  geom_line()+
+  facet_wrap(pH.treatment~Source)
+pdf("16S_Pielou_vs_ageandpH.pdf")
+last_plot()
+dev.off()
+
+```
+##Heterotrophs vs Autotrophs
+library(dplyr)
+library(plyr)
+library(Rmisc)
+library(phyloseq)
+library(ggplot2)
+###Relative abundance
+```{r Isolate organisms list for Nadjejda - 16S}
+dat_2fold_FDR_16S <- tax_glom(Nad_phyloseq_16S, taxrank = 'Genus') %>% #Merge the species at the Genus level
+  transform_sample_counts(function(x) {x/sum(x)} ) %>% #Extract abundance data from phyloseq object
+  psmelt() #Melt it into a dataframe
+dat_2fold_FDR_16S <- dat_2fold_FDR_16S[order(dat_2fold_FDR_16S$Genus),] #Order them at the Genus level
+
+dat_2fold_FDR_16S$Class <- as.character(dat_2fold_FDR_16S$Genus) # reshape data type as R.
+#medians_16S <- ddply(dat_2fold_FDR_16S, ~Genus, function(x) c(median=mean(x$Abundance))) 
+#remainder_16S <- medians_16S[medians_16S$median <= 0.01,]$Genus # find Genus whose rel. abund. is less than 1%
+#dat_2fold_FDR_16S[dat_2fold_FDR_16S$Genus %in% remainder_16S,]$Genus <- 'Rare_Taxa' # change their name to "rare taxa"
+
+Summary_16S <- summarySE(dat_2fold_FDR_16S, measurevar="Abundance", groupvars=c("Domain", "Phylum", "Class", "Order", "Family", "Genus")) #Keep these variables in this order
+
+write.csv(Summary_16S,"Genera_for_Nadjejda.csv")
+
+```
+###Absolute abundance
+```{r Isolate organisms list for Nadjejda - 16S}
+dat_2fold_FDR_16S_abs <- tax_glom(Nad_phyloseq_16S, taxrank = 'Genus') %>% #Merge the species at the Genus level
+  transform_sample_counts(function(x) {x} ) %>% #Extract abundance data from phyloseq object
+  psmelt() #Melt it into a dataframe
+dat_2fold_FDR_16S_abs <- dat_2fold_FDR_16S_abs[order(dat_2fold_FDR_16S_abs$Genus),] #Order them at the Genus level
+
+dat_2fold_FDR_16S_abs$Class <- as.character(dat_2fold_FDR_16S_abs$Genus) # reshape data type as R.
+#medians_16S <- ddply(dat_2fold_FDR_16S, ~Genus, function(x) c(median=mean(x$Abundance))) 
+#remainder_16S <- medians_16S[medians_16S$median <= 0.01,]$Genus # find Genus whose rel. abund. is less than 1%
+#dat_2fold_FDR_16S[dat_2fold_FDR_16S$Genus %in% remainder_16S,]$Genus <- 'Rare_Taxa' # change their name to "rare taxa"
+
+Summary_16S_abs <- summarySE(dat_2fold_FDR_16S_abs, measurevar="Abundance", groupvars=c("Domain", "Phylum", "Class", "Order", "Family", "Genus","pH.treatment", "age.slide..months." )) #Keep these variables in this order
+
+write.csv(Summary_16S_abs,"Genera_for_Nadjejda_16S_abs.csv")
+
+```
+##Settlement inducers
+List of organisms:
+Pseudoalteromonas luteoviolacea (Phylum:Proteobacteria, Class:Gammaproteobacteria, Order: Alteromonadales, Family: Pseudoalteromonadaceae, Genus: Pseudoalteromonas)
+Bacillus aquimaris (Phylum: Firmicutes, Class: Bacilli, Order: Bacillales,  Familia: Bacillaceae, Genus: Bacillus)
+Staphylococcus warneri (Phylum:Firmicutes, Class:cocci, Order: Bacillales, Family: Staphylococcaceae, Genus: Staphylococcus)
+Cellulophaga (Cytophaga) lytica (Phylum Bacteroidetes Class Cytophagia, Order Cytophagales Family Cytophagaceae, Genus Cytophaga)
+Nitzschia paleacea (Phylum: Ochrophyta, Class: Bacillariophyceae, Order: Bacillariales, Family: Bacillariaceae, Genus: Nitzschia)
+Denticula sp. (Phylum: Ochrophyta, Class: Bacillariophyceae, Order: Bacillariales, Family: Bacillariaceae, Genus: Denticula)
+Nitzschia constricta (Phylum: Ochrophyta, Class: Bacillariophyceae, Order: Bacillariales, Family: Bacillariaceae, Genus: Nitzschia)
+
+library(dplyr)
+library(plyr)
+library(Rmisc)
+library(phyloseq)
+library(ggplot2)
+###Relative abundance
+```{r 16S inducers}
+
+####Calculating####
+Inducers_16S = subset_taxa(Nad_phyloseq_16S, Genus == "Pseudomonas" | Genus == "Bacillus" | Genus == "Staphylococcus" | Genus == "Cytophaga" | Genus == "Nitzschia" | Genus == "Denticula" | Genus == "Nitzschia")
+
+dat_2fold_FDR_16S <- tax_glom(Inducers_16S, taxrank = 'Genus') %>% #Merge the species at the genus level
+  transform_sample_counts(function(x) {x/sum(x)} ) %>% #Extract abundance data from phyloseq object
+  psmelt() #Melt it into a dataframe
+dat_2fold_FDR_16S <- dat_2fold_FDR_16S[order(dat_2fold_FDR_16S$Genus),] #Order them at the Genus level
+
+dat_2fold_FDR_16S$Genus <- as.character(dat_2fold_FDR_16S$Genus) # group dataframe by Genus, calculate relative abundance
+
+Summary_16S <- summarySE(dat_2fold_FDR_16S, measurevar="Abundance", groupvars=c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "pH.treatment", "age.slide..months.", "X..selective.settlement..on.slides.")) #Keep these variables in this order
+
+Summary_16S #Make sure it worked
+
+Summary_16S<-dplyr::arrange(Summary_16S,Genus, Abundance, X..selective.settlement..on.slides.) #Rearrange for ease of reading
+
+Summary_16S$Class <- factor(Summary_16S$Genus,
+                         levels=(unique(Summary_16S$Genus))) #Ensure each phyla is unique
+
+####Plotting####
+
+#Make a plot based on the dataframe
+    Summary_16S_plot_age <-ggplot(Summary_16S, 
+                        aes(x= age.slide..months., 
+                            y=Genus, 
+                           fill = Abundance*100
+                           ))+ 
+  geom_line(stat = "identity") + 
+  theme_bw()+
+  theme(legend.position = "right", 
+        strip.background = element_blank())+
+      scale_fill_gradient(low = "red", high = "navy")+
+ xlab("Age (months)")+
+   labs(fill = "Mean relative \nabundance (%)")
+
+    #Run plot for later ggsave()
+    Summary_16S_plot_age
+    
+pdf("16S_Inducers_age_withAmbient.pdf")
+last_plot()
+dev.off()
+
+    Summary_16S_plot_pH <-ggplot(Summary_16S, 
+                        aes(x= pH.treatment, 
+                            y=Genus, 
+                           fill = Abundance*100
+                           ))+ 
+  geom_tile(stat = "identity") +
+  theme_bw()+
+  theme(legend.position = "right", 
+        strip.background = element_blank())+
+      scale_fill_gradient(low = "red", high = "navy")+
+ xlab("pH treatment")+
+   labs(fill = "Mean relative \nabundance (%)")
+
+    #Run plot for later ggsave()
+    Summary_16S_plot_pH
+    
+pdf("16S_Inducers_pH_withAmbient.pdf")
+last_plot()
+dev.off()
+
+
+library(ggplot2)
+    Summary_16S_plot_agepH <-ggplot(Summary_16S, 
+                        aes(x= age.slide..months., 
+                            y=Genus, 
+                           fill = Abundance*100
+                           ))+ 
+  geom_tile(stat = "identity") +
+  theme_bw()+
+  theme(legend.position = "right", 
+        strip.background = element_blank())+
+      scale_fill_gradient(low = "red", high = "navy")+
+ xlab("Age (months)")+
+   labs(fill = "Mean relative \nabundance (%)")+
+      facet_wrap(~pH.treatment)
+
+    #Run plot for later ggsave()
+    Summary_16S_plot_agepH
+    
+pdf("16S_Inducers_agepH_withAmbient.pdf")
+last_plot()
+dev.off()
+
+####Actual####
+
+    Summary_16S_plot_pHage <-ggplot(Summary_16S)+ 
+  geom_line(aes(x=pH.treatment, 
+                            y=Abundance*100, 
+                           colour = Genus,
+                           group = Genus
+                           )) +
+  theme_bw()+
+  theme(legend.position = "right", 
+        strip.background = element_blank())+
+      scale_fill_gradient(low = "red", high = "navy")+
+ xlab("pH")+
+   labs(fill = "Mean relative \nabundance (%)")+
+      facet_wrap(~age.slide..months.)
+
+Summary_16S_plot_pHage
+
+
+Summary_16S_plot_pHage = Summary_16S_plot_pHage + geom_line(aes(x=pH.treatment, 
+                    y=as.numeric(as.character(X..selective.settlement..on.slides.)),
+                    group = age.slide..months.))+
+  scale_y_continuous(sec.axis = sec_axis(~., name = "Selective Settlement (%)"))
+
+
+Fortest = sample_data(Nad_phyloseq_16S)
+write.csv(Fortest, "Please_Check.csv")
+
+    
+#Run plot for later ggsave()
+    Summary_16S_plot_pHage
+    
+pdf("16S_Inducers_pHage_withAmbient_andSettlement.pdf")
+last_plot()
+dev.off()
+```
+###Absolute abundance
+```{r 16S inducers}
+
+####Calculating####
+Inducers_16S = subset_taxa(Nad_phyloseq_16S, Genus == "Pseudomonas" | Genus == "Bacillus" | Genus == "Staphylococcus" | Genus == "Cytophaga" | Genus == "Nitzschia" | Genus == "Denticula")
+
+dat_2fold_FDR_16S_abs <- tax_glom(Inducers_16S, taxrank = 'Genus') %>% #Merge the species at the genus level
+  transform_sample_counts(function(x) {x} ) %>% #Extract abundance data from phyloseq object
+  psmelt() #Melt it into a dataframe
+dat_2fold_FDR_16S_abs <- dat_2fold_FDR_16S_abs[order(dat_2fold_FDR_16S_abs$Genus),] #Order them at the Genus level
+
+dat_2fold_FDR_16S_abs$Genus <- as.character(dat_2fold_FDR_16S_abs$Genus) # group dataframe by Genus, calculate relative abundance
+
+Summary_16S_abs <- summarySE(dat_2fold_FDR_16S_abs, measurevar="Abundance", groupvars=c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "pH.treatment", "age.slide..months.", "X..selective.settlement..on.slides.")) #Keep these variables in this order
+
+Summary_16S_abs #Make sure it worked
+
+Summary_16S_abs<-dplyr::arrange(Summary_16S_abs,Genus, Abundance, X..selective.settlement..on.slides.) #Rearrange for ease of reading
+
+Summary_16S_abs$Class <- factor(Summary_16S_abs$Genus,
+                         levels=(unique(Summary_16S_abs$Genus))) #Ensure each phyla is unique
+
+####Plotting####
+
+#Make a plot based on the dataframe
+    Summary_16S_plot_age_abs <-ggplot(Summary_16S_abs, 
+                        aes(x= age.slide..months., 
+                            y=Genus, 
+                           fill = Abundance
+                           ))+ 
+  geom_tile(stat = "identity") + 
+  theme_bw()+
+  theme(legend.position = "right", 
+        strip.background = element_blank())+
+      scale_fill_gradient(low = "red", high = "navy")+
+ xlab("Age (months)")+
+   labs(fill = "Mean relative \nabundance (%)")
+
+    #Run plot for later ggsave()
+    Summary_16S_plot_age_abs
+    
+pdf("16S_Inducers_age_withAmbient_absolute.pdf")
+last_plot()
+dev.off()
+
+    Summary_16S_plot_pH_abs <-ggplot(Summary_16S_abs, 
+                        aes(x= pH.treatment, 
+                            y=Genus, 
+                           fill = Abundance*100
+                           ))+ 
+  geom_tile(stat = "identity") +
+  theme_bw()+
+  theme(legend.position = "right", 
+        strip.background = element_blank())+
+      scale_fill_gradient(low = "red", high = "navy")+
+ xlab("pH treatment")+
+   labs(fill = "Mean relative \nabundance (%)")
+
+    #Run plot for later ggsave()
+    Summary_16S_plot_pH_abs
+    
+pdf("16S_Inducers_pH_withAmbient_absolute.pdf")
+last_plot()
+dev.off()
+
+
+    Summary_16S_plot_agepH_abs <-ggplot(Summary_16S_abs, 
+                        aes(x= age.slide..months., 
+                            y=Genus, 
+                           fill = Abundance*100
+                           ))+ 
+  geom_tile(stat = "identity") +
+  theme_bw()+
+  theme(legend.position = "right", 
+        strip.background = element_blank())+
+      scale_fill_gradient(low = "red", high = "navy")+
+ xlab("Age (months)")+
+   labs(fill = "Mean relative \nabundance (%)")+
+      facet_wrap(~pH.treatment)
+
+    #Run plot for later ggsave()
+    Summary_16S_plot_agepH_abs
+    
+pdf("16S_Inducers_agepH_withAmbient_absolute.pdf")
+last_plot()
+dev.off()
+
+####Actual####
+library(ggplot2)
+    Summary_16S_plot_pHage_abs <-ggplot(Summary_16S_abs, aes(x=pH.treatment))+ 
+  geom_line(aes(y=Abundance, 
+                color = Genus,
+                group = Genus
+                           )) +
+  theme_bw()+
+  theme(legend.position = "right", 
+        strip.background = element_blank())+
+      scale_fill_gradient(low = "red", high = "navy")+
+ xlab("pH")+
+      ylab("Absolute number of reads")+
+   labs(fill = "Mean relative \nabundance (%)")+
+      facet_wrap(~age.slide..months.)+
+      ylim(0,30)
+
+Summary_16S_plot_pHage_abs
+
+
+Summary_16S_plot_pHage_abs = Summary_16S_plot_pHage_abs + geom_line(aes(x=pH.treatment, 
+                    y=as.numeric(as.character(X..selective.settlement..on.slides.))/3,
+                    group = age.slide..months.))+
+  scale_y_continuous(sec.axis = sec_axis(~.*3, name = "Selective Settlement (%)"))
+
+
+#Fortest_abs = sample_data(Nad_phyloseq_16S_abs)
+#write.csv(Fortest_abs, "Please_Check.csv")
+
+    
+#Run plot for later ggsave()
+    Summary_16S_plot_pHage_abs
+    
+pdf("16S_Inducers_pHage_withAmbient_andSettlement_absolute.pdf")
+last_plot()
+dev.off()
+```
+##Settlement inhibitors
+List of organisms:
+Euplotes minuta (Phylum: Ciliophora, Class: Spirotrichea, Order: Euplotida, Family: Euplotidae, Genus: Euplotes )
+Amphisiella sp. (Phylum: Ciliophora, Class: Spirotrichea, Sublcass: Hypotrichia, Family: Amphisiellidae, Genus: Amphisiella)
+Uronema marinum (Phylum: Ciliophora, Class: Oligohymenophorea, Order:  Philasterida, Family: Uronematidae, Genus: Uronema)
+Diophrys oligothrix (Phylum: Ciliophora, Class: Spirotrichea, Order: Euplotida, Family: Uronychiidae, Genus: Diophrys)
+Cyclidium sp. (Phylum: Ciliophora, Class: Oligohymenophorea, Order: Pleuronematida, Family: Cyclidiidae, Genus: Cyclidium)
+Protocruzia sp. (Phylum: Ciliophora, Class: Spirotrichea, Order: Protocruziida, Family: Protocruziidae, Genus: Protocruzia)
+Pseudocohnilembus sp. (Phylum: Ciliophora, Class: Oligohymenophorea, Order: Philasterida, Family: Pseudocohnilembidae, Genus: Pseudocohnilembus)
+Litonotus sp. (Phylum: Ciliophora, Class: Litostomatea, Order: Pleurostomatida, Family: Litonotidae, Genus: Litonotus) 
+Achnanthes sp. (Phylum: Ochrophyta, Class: Bacillariophyceae, Order: Achnanthales, Family: Achnanthaceae, Genus: Achnanthes)
+Nitzschia sp. (Phylum: Ochrophyta, Class: Bacillariophyceae, Order: Bacillariales, Family: Bacillariaceae, Genus: Nitzschia)
+Scoliopleura sp. (Phylum: Ochrophyta, Class: Bacillariophyceae, Order: Naviculales, Family: Scoliotropidaceae, Genus: Scoliopleura)
+Synedra sp. (Phylum: Ochrophyta, Class: Bacillariophyceae, Order: Fragilariales, Family: Fragilariaceae, Genus: Synedra)
+Achnantes petersenii (Phylum: Ochrophyta, Class: Bacillariophyceae, Order: Achnanthales, Family: Achnanthaceae, Genus: Achnanthes)
+Navicula sp. (Phylum: Ochrophyta, Class: Bacillariophyceae, Order: Naviculales, Family: Naviculaceae, Genus: Navicula)
+Halamphora (Amphora) coffeaeformis (Phylum: Ochrophyta, Class: Bacillariophyceae, Order: Naviculales, Family: Amphipleuraceae, Genus: Halamphora)
+
+```{r 16S inhibitors}
+
+Inhibitors_16S = subset_taxa(Nad_phyloseq_16S, Genus == "Euplotes" | Genus == "Amphisiella" | Genus == "Uronema" | Genus == "Diophrys" | Genus == "Cyclidium" | Genus == "Protocruzia" | Genus == "Pseudocohnilembus" | Genus == "Litonotus" | Genus == "Achnanthes" | Genus == "Nitzschia" | Genus == "Scoliopleura" | Genus == "Synedra" | Genus == "Achnanthes" | Genus == "Navicula" | Genus == "Halamphora")
+
+dat_2fold_FDR_16S <- tax_glom(Inhibitors_16S, taxrank = 'Genus') %>% #Merge the species at the Phylum level
+  transform_sample_counts(function(x) {x/sum(x)} ) %>% #Extract abundance data from phyloseq object
+  psmelt() #Melt it into a dataframe
+dat_2fold_FDR_16S <- dat_2fold_FDR_16S[order(dat_2fold_FDR_16S$Class),] #Order them at the Class level
+
+dat_2fold_FDR_16S$Class <- as.character(dat_2fold_FDR_16S$Class) # group dataframe by Class, calculate relative abundance
+#medians_16S <- ddply(dat_2fold_FDR_16S, ~Class, function(x) c(median=mean(x$Abundance))) # find Class whose rel. abund. is less than 1%
+#remainder_16S <- medians_16S[medians_16S$median <= 0.01,]$Class # change their name to "Remainder"
+#dat_2fold_FDR_16S[dat_2fold_FDR_16S$Class %in% remainder_16S,]$Class <- 'RareTaxa'
+
+Summary_16S <- summarySE(dat_2fold_FDR_16S, measurevar="Abundance", groupvars=c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "pH.treatment", "age.slide..months.")) #Keep these variables in this order
+
+Summary_16S #Make sure it worked
+
+Summary_16S<-dplyr::arrange(Summary_16S,Genus, Abundance) #Rearrange for ease of reading
+
+Summary_16S$Class <- factor(Summary_16S$Genus,
+                         levels=(unique(Summary_16S$Genus))) #Ensure each phyla is unique
+
+#Make a plot based on the dataframe
+    Summary_16S_plot <-ggplot(Summary_16S, 
+                        aes(x= age.slide..months., 
+                            y=Genus, 
+                           fill = Abundance*100
+                           ))+ 
+  geom_tile(stat = "identity") + 
+ # geom_errorbar(aes(ymin=(Abundance-se)*100, 
+  #                  ymax=(Abundance+se)*100), 
+   #             colour="black", 
+    #            position=pd
+     #           )+
+  theme_bw()+
+  theme(legend.position = "right", 
+        strip.background = element_blank())+
+      scale_fill_gradient(low = "red", high = "navy")+
+ xlab("Age (months)")+
+   labs(fill = "Mean relative \nabundance (%)")
+ # ylab("Mean relative abundance")
+ # scale_colour_manual("Phylum", values = Phylum_colour_list)+
+
+    #Run plot for later ggsave()
+    Summary_16S_plot
+    
+pdf("16S_Inhibitors.pdf")
+last_plot()
+dev.off()
+```
+
+##Spearman correlations
+###16S
+```{r}
+Nad_phyloseq_16S_7months = subset_samples(Nad_phyloseq_16S, age.slide..months. == "7")
+Nad_phyloseq_16S_10months = subset_samples(Nad_phyloseq_16S, age.slide..months. == "10")
+Nad_phyloseq_16S_14months = subset_samples(Nad_phyloseq_16S, age.slide..months. == "14")
+
+```
+
+####7 months
+#####Set up for spearman
+```{r}
+#Phyloseq to df
+Forspearman_16S_df_Genus_7months <- tax_glom(Nad_phyloseq_16S_7months, taxrank = 'Genus') %>%#Merge the species at the phylum level
+  transform_sample_counts(function(x) {x/sum(x)} ) %>% #Extract abundance data from phyloseq object
+  psmelt() #Melt into a df
+
+#Subset by pH
+pH7_df_Genus = subset(Forspearman_16S_df_Genus_7months, pH.treatment == "7")
+pH7.2_df_Genus = subset(Forspearman_16S_df_Genus_7months, pH.treatment == "7.2")
+pH7.4_df_Genus = subset(Forspearman_16S_df_Genus_7months, pH.treatment == "7.4")
+pH7.7_df_Genus = subset(Forspearman_16S_df_Genus_7months, pH.treatment == "7.7")
+pH7.9_df_Genus = subset(Forspearman_16S_df_Genus_7months, pH.treatment == "7.9")
+pH8.1_df_Genus = subset(Forspearman_16S_df_Genus_7months, pH.treatment == "8.1")
+
+#Extract only info I need - Abundance, Taxa, pH, age, settlement
+pH7_df_Genus = pH7_df_Genus[,c(3,19:30)]
+pH7.2_df_Genus = pH7.2_df_Genus[,c(3,19:30)]
+pH7.4_df_Genus = pH7.4_df_Genus[,c(3,19:30)]
+pH7.7_df_Genus = pH7.7_df_Genus[,c(3,19:30)]
+pH7.9_df_Genus = pH7.9_df_Genus[,c(3,19:30)]
+pH8.1_df_Genus = pH8.1_df_Genus[,c(3,19:30)]
+
+trans_pH7_df_Genus = as.data.frame(t(pH7_df_Genus[,as.numeric(1)]))
+colnames(trans_pH7_df_Genus) = pH7_df_Genus$Genus
+trans_pH7.2_df_Genus = as.data.frame(t(pH7.2_df_Genus[,(as.numeric(1))]))
+colnames(trans_pH7.2_df_Genus) = pH7.2_df_Genus$Genus
+trans_pH7.4_df_Genus = as.data.frame(t(pH7.4_df_Genus[,as.numeric(1)]))
+colnames(trans_pH7.4_df_Genus) = pH7.4_df_Genus$Genus
+trans_pH7.7_df_Genus = as.data.frame(t(pH7.7_df_Genus[,as.numeric(1)]))
+colnames(trans_pH7.7_df_Genus) = pH7.7_df_Genus$Genus
+trans_pH7.9_df_Genus = as.data.frame(t(pH7.9_df_Genus[,as.numeric(1)]))
+colnames(trans_pH7.9_df_Genus) = pH7.9_df_Genus$Genus
+trans_pH8.1_df_Genus = as.data.frame(t(pH8.1_df_Genus[,as.numeric(1)]))
+colnames(trans_pH8.1_df_Genus) = pH8.1_df_Genus$Genus
+
+#Get mean at Genus level
+pH7_Genus_mean = as.data.frame(split.default(trans_pH7_df_Genus, names(trans_pH7_df_Genus)))
+pH7.2_Genus_mean = as.data.frame(split.default(trans_pH7.2_df_Genus, names(trans_pH7.2_df_Genus)))
+pH7.4_Genus_mean = as.data.frame(split.default(trans_pH7.4_df_Genus, names(trans_pH7.4_df_Genus)))
+pH7.7_Genus_mean = as.data.frame(split.default(trans_pH7.7_df_Genus, names(trans_pH7.7_df_Genus)))
+pH7.9_Genus_mean = as.data.frame(split.default(trans_pH7.9_df_Genus, names(trans_pH7.9_df_Genus)))
+pH8.1_Genus_mean = as.data.frame(split.default(trans_pH8.1_df_Genus, names(trans_pH8.1_df_Genus)))
+
+#Bind into one df
+Forspearman_Genus_surface_df = rbind(pH7_Genus_mean, pH7.2_Genus_mean, pH7.4_Genus_mean, pH7.7_Genus_mean, pH7.9_Genus_mean, pH8.1_Genus_mean)
+
+#Add column for distance from L1 and rownames.
+rownames(Forspearman_Genus_surface_df) = c("pH7_abundance", 
+                                           "pH7.2_abundance",
+                                           "pH7.4_abundance",
+                                           "pH7.7_abundance",
+                                           "pH7.9_abundance",
+                                           "pH8.1_abundance")
+
+#Add settlement as extra column for spearman
+Forspearman_Genus_surface_df$Settlement = c(0, #pH 7
+                                            76.98, #pH 7.2
+                                            80.19, #pH 7.4
+                                            37.61, #pH 7.7
+                                            50.32, #pH 7.9
+                                            64.6) #pH 8.1
+
+```
+#####Carry out spearman
+```{r}
+
+#Make df to add values to.
+Spearman_results_16S_7months = data.frame(Genus = NA, rho = as.numeric(0), p.value = as.numeric(0), adjusted.p.value = as.numeric(0))
+dim(Forspearman_Genus_surface_df)
+#Expand df to fit all genera.
+Spearman_results_16S_7months = Spearman_results_16S_7months[1:1618,1:4]
+
+Spearman_16S_7months = lapply(Forspearman_Genus_surface_df, MARGIN = 2, cor.test, y = Forspearman_Genus_surface_df$Settlement, method = "s")
+
+#Set up and run loops for rho and p values.
+y=Forspearman_Genus_surface_df[,1:1618]
+rho_list_16S_7months = vector("list", 1618)
+
+for (i in 1:length(y) ){
+  rho_list_16S_7months[[i]] = Spearman_16S_7months[[i]]$estimate
+  names(rho_list_16S_7months[[i]]) = names(Spearman_16S_7months)[i]
+  Spearman_results_16S_7months[i,2] = rho_list_16S_7months[i]
+  Spearman_results_16S_7months[i,1] = names(Spearman_16S_7months[i])
+}
+
+pvalue_list_16S_7months = vector("list", 948)
+for (i in 1:length(y) ){
+  pvalue_list_16S_7months[[i]] = Spearman_16S_7months[[i]]$p.value
+  names(pvalue_list_16S_7months[[i]]) = names(Spearman_16S_7months)[i]
+  Spearman_results_16S_7months[i,3] = pvalue_list_16S_7months[i]
+}
+
+#Remove NA values
+Spearman_results_noNA_16S_7months = subset(Spearman_results_16S_7months, !rho == "NA")
+
+```
+#####FDR correction
+```{r}
+
+adjusted_p.value_16S_7months = p.adjust(Spearman_results_noNA_16S_7months$p.value, method = "fdr")
+
+#Convert list into dataframe to add to summary table.
+adjusted_p.value_16S_7months_df = as.data.frame(adjusted_p.value_16S_7months)
+
+#Bind adjusted p-value onto data frame
+Spearman_results_noNA_16S_7months$adjusted.p.value = adjusted_p.value_16S_7months_df$adjusted_p.value_16S_7months
+
+```
+#####Extract table
+```{r}
+#Extract the whole dataframe for records
+write.csv(Spearman_results_noNA_16S_7months, "Spearman_taxachanges_16S_7months.csv")
+
+#Subset to only the statistically significant values
+onlysignificance_16S_7months_Genus = subset(Spearman_results_noNA_16S_7months, p.value < 5e-2)
+
+#Have a decent sized list.
+
+#Extract the significant values
+write.csv(onlysignificance_16S_7months_Genus, "Spearman_significant_16S_7months_Genus.csv")
+
+```
+####10 months
+#####Set up for spearman
+```{r}
+#Phyloseq to df
+Forspearman_16S_df_Genus_10months <- tax_glom(Nad_phyloseq_16S_10months, taxrank = 'Genus') %>%#Merge the species at the phylum level
+  transform_sample_counts(function(x) {x/sum(x)} ) %>% #Extract abundance data from phyloseq object
+  psmelt() #Melt into a df
+
+#Subset by pH
+pH7_df_Genus = subset(Forspearman_16S_df_Genus_10months, pH.treatment == "7")
+pH7.2_df_Genus = subset(Forspearman_16S_df_Genus_10months, pH.treatment == "7.2")
+pH7.4_df_Genus = subset(Forspearman_16S_df_Genus_10months, pH.treatment == "7.4")
+pH7.7_df_Genus = subset(Forspearman_16S_df_Genus_10months, pH.treatment == "7.7")
+pH7.9_df_Genus = subset(Forspearman_16S_df_Genus_10months, pH.treatment == "7.9")
+pH8.1_df_Genus = subset(Forspearman_16S_df_Genus_10months, pH.treatment == "8.1")
+
+#Extract only info I need - Abundance, Taxa, pH, age, settlement
+pH7_df_Genus = pH7_df_Genus[,c(3,19:30)]
+pH7.2_df_Genus = pH7.2_df_Genus[,c(3,19:30)]
+pH7.4_df_Genus = pH7.4_df_Genus[,c(3,19:30)]
+pH7.7_df_Genus = pH7.7_df_Genus[,c(3,19:30)]
+pH7.9_df_Genus = pH7.9_df_Genus[,c(3,19:30)]
+pH8.1_df_Genus = pH8.1_df_Genus[,c(3,19:30)]
+
+trans_pH7_df_Genus = as.data.frame(t(pH7_df_Genus[,as.numeric(1)]))
+colnames(trans_pH7_df_Genus) = pH7_df_Genus$Genus
+trans_pH7.2_df_Genus = as.data.frame(t(pH7.2_df_Genus[,(as.numeric(1))]))
+colnames(trans_pH7.2_df_Genus) = pH7.2_df_Genus$Genus
+trans_pH7.4_df_Genus = as.data.frame(t(pH7.4_df_Genus[,as.numeric(1)]))
+colnames(trans_pH7.4_df_Genus) = pH7.4_df_Genus$Genus
+trans_pH7.7_df_Genus = as.data.frame(t(pH7.7_df_Genus[,as.numeric(1)]))
+colnames(trans_pH7.7_df_Genus) = pH7.7_df_Genus$Genus
+trans_pH7.9_df_Genus = as.data.frame(t(pH7.9_df_Genus[,as.numeric(1)]))
+colnames(trans_pH7.9_df_Genus) = pH7.9_df_Genus$Genus
+trans_pH8.1_df_Genus = as.data.frame(t(pH8.1_df_Genus[,as.numeric(1)]))
+colnames(trans_pH8.1_df_Genus) = pH8.1_df_Genus$Genus
+
+#Get mean at Genus level
+pH7_Genus_mean = as.data.frame(split.default(trans_pH7_df_Genus, names(trans_pH7_df_Genus)))
+pH7.2_Genus_mean = as.data.frame(split.default(trans_pH7.2_df_Genus, names(trans_pH7.2_df_Genus)))
+pH7.4_Genus_mean = as.data.frame(split.default(trans_pH7.4_df_Genus, names(trans_pH7.4_df_Genus)))
+pH7.7_Genus_mean = as.data.frame(split.default(trans_pH7.7_df_Genus, names(trans_pH7.7_df_Genus)))
+pH7.9_Genus_mean = as.data.frame(split.default(trans_pH7.9_df_Genus, names(trans_pH7.9_df_Genus)))
+pH8.1_Genus_mean = as.data.frame(split.default(trans_pH8.1_df_Genus, names(trans_pH8.1_df_Genus)))
+
+#Bind into one df
+Forspearman_Genus_surface_df = rbind(pH7_Genus_mean, pH7.2_Genus_mean, pH7.4_Genus_mean, pH7.7_Genus_mean, pH7.9_Genus_mean, pH8.1_Genus_mean)
+
+#Add column for distance from L1 and rownames.
+rownames(Forspearman_Genus_surface_df) = c("pH7_abundance", 
+                                           "pH7.2_abundance",
+                                           "pH7.4_abundance",
+                                           "pH7.7_abundance",
+                                           "pH7.9_abundance",
+                                           "pH8.1_abundance")
+
+#Add settlement as extra column for spearman
+Forspearman_Genus_surface_df$Settlement = c(0, #pH 7
+                                            66.08, #pH 7.2
+                                            72.95, #pH 7.4
+                                            36.86, #pH 7.7
+                                            54.97, #pH 7.9
+                                            66.41) #pH 8.1
+
+```
+#####Carry out spearman
+```{r}
+
+#Make df to add values to.
+Spearman_results_16S_10months = data.frame(Genus = NA, rho = as.numeric(0), p.value = as.numeric(0), adjusted.p.value = as.numeric(0))
+dim(Forspearman_Genus_surface_df)
+#Expand df to fit all genera.
+Spearman_results_16S_10months = Spearman_results_16S_10months[1:1618,1:4]
+
+Spearman_16S_10months = lapply(Forspearman_Genus_surface_df, MARGIN = 2, cor.test, y = Forspearman_Genus_surface_df$Settlement, method = "s")
+
+#Set up and run loops for rho and p values.
+y=Forspearman_Genus_surface_df[,1:1618]
+rho_list_16S_10months = vector("list", 1618)
+
+for (i in 1:length(y) ){
+  rho_list_16S_10months[[i]] = Spearman_16S_10months[[i]]$estimate
+  names(rho_list_16S_10months[[i]]) = names(Spearman_16S_10months)[i]
+  Spearman_results_16S_10months[i,2] = rho_list_16S_10months[i]
+  Spearman_results_16S_10months[i,1] = names(Spearman_16S_10months[i])
+}
+
+pvalue_list_16S_10months = vector("list", 948)
+for (i in 1:length(y) ){
+  pvalue_list_16S_10months[[i]] = Spearman_16S_10months[[i]]$p.value
+  names(pvalue_list_16S_10months[[i]]) = names(Spearman_16S_10months)[i]
+  Spearman_results_16S_10months[i,3] = pvalue_list_16S_10months[i]
+}
+
+#Remove NA values
+Spearman_results_noNA_16S_10months = subset(Spearman_results_16S_10months, !rho == "NA")
+
+```
+#####FDR correction
+```{r}
+
+adjusted_p.value_16S_10months = p.adjust(Spearman_results_noNA_16S_10months$p.value, method = "fdr")
+
+#Convert list into dataframe to add to summary table.
+adjusted_p.value_16S_10months_df = as.data.frame(adjusted_p.value_16S_10months)
+
+#Bind adjusted p-value onto data frame
+Spearman_results_noNA_16S_10months$adjusted.p.value = adjusted_p.value_16S_10months_df$adjusted_p.value_16S_10months
+
+```
+#####Extract table
+```{r}
+#Extract the whole dataframe for records
+write.csv(Spearman_results_noNA_16S_10months, "Spearman_taxachanges_16S_10months.csv")
+
+#Subset to only the statistically significant values
+onlysignificance_16S_10months_Genus = subset(Spearman_results_noNA_16S_10months, p.value < 5e-2)
+
+#Have a decent sized list.
+
+#Extract the significant values
+write.csv(onlysignificance_16S_10months_Genus, "Spearman_significant_16S_10months_Genus.csv")
+
+```
+####14 months
+#####Set up for spearman
+```{r}
+#Phyloseq to df
+Forspearman_16S_df_Genus_14months <- tax_glom(Nad_phyloseq_16S_14months, taxrank = 'Genus') %>%#Merge the species at the phylum level
+  transform_sample_counts(function(x) {x/sum(x)} ) %>% #Extract abundance data from phyloseq object
+  psmelt() #Melt into a df
+
+#Subset by pH
+pH7_df_Genus = subset(Forspearman_16S_df_Genus_14months, pH.treatment == "7")
+pH7.2_df_Genus = subset(Forspearman_16S_df_Genus_14months, pH.treatment == "7.2")
+pH7.4_df_Genus = subset(Forspearman_16S_df_Genus_14months, pH.treatment == "7.4")
+pH7.7_df_Genus = subset(Forspearman_16S_df_Genus_14months, pH.treatment == "7.7")
+pH7.9_df_Genus = subset(Forspearman_16S_df_Genus_14months, pH.treatment == "7.9")
+pH8.1_df_Genus = subset(Forspearman_16S_df_Genus_14months, pH.treatment == "8.1")
+
+#Extract only info I need - Abundance, Taxa, pH, age, settlement
+pH7_df_Genus = pH7_df_Genus[,c(3,19:30)]
+pH7.2_df_Genus = pH7.2_df_Genus[,c(3,19:30)]
+pH7.4_df_Genus = pH7.4_df_Genus[,c(3,19:30)]
+pH7.7_df_Genus = pH7.7_df_Genus[,c(3,19:30)]
+pH7.9_df_Genus = pH7.9_df_Genus[,c(3,19:30)]
+pH8.1_df_Genus = pH8.1_df_Genus[,c(3,19:30)]
+
+trans_pH7_df_Genus = as.data.frame(t(pH7_df_Genus[,as.numeric(1)]))
+colnames(trans_pH7_df_Genus) = pH7_df_Genus$Genus
+trans_pH7.2_df_Genus = as.data.frame(t(pH7.2_df_Genus[,(as.numeric(1))]))
+colnames(trans_pH7.2_df_Genus) = pH7.2_df_Genus$Genus
+trans_pH7.4_df_Genus = as.data.frame(t(pH7.4_df_Genus[,as.numeric(1)]))
+colnames(trans_pH7.4_df_Genus) = pH7.4_df_Genus$Genus
+trans_pH7.7_df_Genus = as.data.frame(t(pH7.7_df_Genus[,as.numeric(1)]))
+colnames(trans_pH7.7_df_Genus) = pH7.7_df_Genus$Genus
+trans_pH7.9_df_Genus = as.data.frame(t(pH7.9_df_Genus[,as.numeric(1)]))
+colnames(trans_pH7.9_df_Genus) = pH7.9_df_Genus$Genus
+trans_pH8.1_df_Genus = as.data.frame(t(pH8.1_df_Genus[,as.numeric(1)]))
+colnames(trans_pH8.1_df_Genus) = pH8.1_df_Genus$Genus
+
+#Get mean at Genus level
+pH7_Genus_mean = as.data.frame(split.default(trans_pH7_df_Genus, names(trans_pH7_df_Genus)))
+pH7.2_Genus_mean = as.data.frame(split.default(trans_pH7.2_df_Genus, names(trans_pH7.2_df_Genus)))
+pH7.4_Genus_mean = as.data.frame(split.default(trans_pH7.4_df_Genus, names(trans_pH7.4_df_Genus)))
+pH7.7_Genus_mean = as.data.frame(split.default(trans_pH7.7_df_Genus, names(trans_pH7.7_df_Genus)))
+pH7.9_Genus_mean = as.data.frame(split.default(trans_pH7.9_df_Genus, names(trans_pH7.9_df_Genus)))
+pH8.1_Genus_mean = as.data.frame(split.default(trans_pH8.1_df_Genus, names(trans_pH8.1_df_Genus)))
+
+#Bind into one df
+Forspearman_Genus_surface_df = rbind(pH7_Genus_mean, pH7.2_Genus_mean, pH7.4_Genus_mean, pH7.7_Genus_mean, pH7.9_Genus_mean, pH8.1_Genus_mean)
+
+#Add column for distance from L1 and rownames.
+rownames(Forspearman_Genus_surface_df) = c("pH7_abundance", 
+                                           "pH7.2_abundance",
+                                           "pH7.4_abundance",
+                                           "pH7.7_abundance",
+                                           "pH7.9_abundance",
+                                           "pH8.1_abundance")
+
+#Add settlement as extra column for spearman
+Forspearman_Genus_surface_df$Settlement = c(0, #pH 7
+                                            42.94, #pH 7.2
+                                            65.45, #pH 7.4
+                                            48.89, #pH 7.7
+                                            53.46, #pH 7.9
+                                            70.74) #pH 8.1
+
+```
+#####Carry out spearman
+```{r}
+
+#Make df to add values to.
+Spearman_results_16S_14months = data.frame(Genus = NA, rho = as.numeric(0), p.value = as.numeric(0), adjusted.p.value = as.numeric(0))
+dim(Forspearman_Genus_surface_df)
+#Expand df to fit all genera.
+Spearman_results_16S_14months = Spearman_results_16S_14months[1:1618,1:4]
+
+Spearman_16S_14months = lapply(Forspearman_Genus_surface_df, MARGIN = 2, cor.test, y = Forspearman_Genus_surface_df$Settlement, method = "s")
+
+#Set up and run loops for rho and p values.
+y=Forspearman_Genus_surface_df[, 1:1618]
+rho_list_16S_14months = vector("list", 1618)
+
+for (i in 1:length(y) ){
+  rho_list_16S_14months[[i]] = Spearman_16S_14months[[i]]$estimate
+  names(rho_list_16S_14months[[i]]) = names(Spearman_16S_14months)[i]
+  Spearman_results_16S_14months[i,2] = rho_list_16S_14months[i]
+  Spearman_results_16S_14months[i,1] = names(Spearman_16S_14months[i])
+}
+
+pvalue_list_16S_14months = vector("list", 948)
+for (i in 1:length(y) ){
+  pvalue_list_16S_14months[[i]] = Spearman_16S_14months[[i]]$p.value
+  names(pvalue_list_16S_14months[[i]]) = names(Spearman_16S_14months)[i]
+  Spearman_results_16S_14months[i,3] = pvalue_list_16S_14months[i]
+}
+
+#Remove NA values
+Spearman_results_noNA_16S_14months = subset(Spearman_results_16S_14months, !rho == "NA")
+
+```
+#####FDR correction
+```{r}
+
+adjusted_p.value_16S_14months = p.adjust(Spearman_results_noNA_16S_14months$p.value, method = "fdr")
+
+#Convert list into dataframe to add to summary table.
+adjusted_p.value_16S_14months_df = as.data.frame(adjusted_p.value_16S_14months)
+
+#Bind adjusted p-value onto data frame
+Spearman_results_noNA_16S_14months$adjusted.p.value = adjusted_p.value_16S_14months_df$adjusted_p.value_16S_14months
+
+```
+#####Extract table
+```{r}
+#Extract the whole dataframe for records
+write.csv(Spearman_results_noNA_16S_14months, "Spearman_taxachanges_16S_14months.csv")
+
+#Subset to only the statistically significant values
+onlysignificance_16S_14months_Genus = subset(Spearman_results_noNA_16S_14months, p.value < 5e-2)
+
+#Have a decent sized list.
+
+#Extract the significant values
+write.csv(onlysignificance_16S_14months_Genus, "Spearman_significant_16S_14months_Genus.csv")
+
+```
+
+##Kruskal-Wallis
+library(MultNonParam)
+library(PMCMR)
+
+###Without ambient
+```{r KW Age}
+
+Biofilm_16S = subset_samples(Nad_phyloseq_16S, Source == "Biofilm")
+
+####16S####
+kruskal.test(Biofilm_16S@sam_data$Observed, Biofilm_16S@sam_data$age.slide..months.)
+kruskal.test(Biofilm_16S@sam_data$Shannon, Biofilm_16S@sam_data$age.slide..months.)
+kruskal.test(Biofilm_16S@sam_data$Pielou, Biofilm_16S@sam_data$age.slide..months.)
+
+```
+```{r KW pH}
+####16S####
+kruskal.test(Biofilm_16S@sam_data$Observed, Biofilm_16S@sam_data$pH.treatment)
+kruskal.test(Biofilm_16S@sam_data$Shannon, Biofilm_16S@sam_data$pH.treatment)
+kruskal.test(Biofilm_16S@sam_data$Pielou, Biofilm_16S@sam_data$pH.treatment)
+
+```
+```{r kW pH and age interaction}
+
+Biofilm_16S_df = as.data.frame(as.matrix(Biofilm_16S@sam_data))
+
+#####16S Interaction tests ####
+inter_age_pH_16S <-interaction(Biofilm_16S_df$age.slide..months., Biofilm_16S_df$pH.treatment)
+kruskal.test(Observed ~ inter_age_pH_16S, data = Biofilm_16S_df)
+kruskal.test(Shannon ~ inter_age_pH_16S, data = Biofilm_16S_df)
+kruskal.test(Pielou ~ inter_age_pH_16S, data = Biofilm_16S_df)
+
+```
+
+
+
+###With ambient
+```{r KW Age}
+
+####16S####
+kruskal.test(Nad_phyloseq_16S@sam_data$Observed, Nad_phyloseq_16S@sam_data$age.slide..months.)
+kruskal.test(Nad_phyloseq_16S@sam_data$Shannon, Nad_phyloseq_16S@sam_data$age.slide..months.)
+kruskal.test(Nad_phyloseq_16S@sam_data$Pielou, Nad_phyloseq_16S@sam_data$age.slide..months.)
+
+```
+```{r KW pH}
+####16S####
+kruskal.test(Nad_phyloseq_16S@sam_data$Observed, Nad_phyloseq_16S@sam_data$pH.treatment)
+kruskal.test(Nad_phyloseq_16S@sam_data$Shannon, Nad_phyloseq_16S@sam_data$pH.treatment)
+kruskal.test(Nad_phyloseq_16S@sam_data$Pielou, Nad_phyloseq_16S@sam_data$pH.treatment)
+#All are significant
+
+```
+```{r kW pH and age interaction}
+
+Nad_phyloseq_16S_df = as.data.frame(as.matrix(Nad_phyloseq_16S@sam_data))
+
+#####16S Interaction tests ####
+inter_age_pH_16S <-interaction(Nad_phyloseq_16S_df$age.slide..months., Nad_phyloseq_16S_df$pH.treatment)
+kruskal.test(Observed ~ inter_age_pH_16S, data = Nad_phyloseq_16S_df)
+kruskal.test(Shannon ~ inter_age_pH_16S, data = Nad_phyloseq_16S_df)
+kruskal.test(Pielou ~ inter_age_pH_16S, data = Nad_phyloseq_16S_df)
+
+```
+##Alpha-div post-hoc 
+library(MultNonParam)
+library(PMCMR)
+
+###Without ambient
+```{r KW Age}
+
+Biofilm_16S = subset_samples(Nad_phyloseq_16S, Source == "Biofilm")
+
+####16S####
+pairwise.wilcox.test(Biofilm_16S@sam_data$Observed, Biofilm_16S@sam_data$age.slide..months., p.adjust.method = "bonferroni")
+pairwise.wilcox.test(Biofilm_16S@sam_data$Shannon, Biofilm_16S@sam_data$age.slide..months., p.adjust.method = "bonferroni")
+pairwise.wilcox.test(Biofilm_16S@sam_data$Pielou, Biofilm_16S@sam_data$age.slide..months., p.adjust.method = "bonferroni")
+
+```
+```{r KW pH}
+####16S####
+pairwise.wilcox.test(Biofilm_16S@sam_data$Observed, Biofilm_16S@sam_data$pH.treatment, p.adjust.method = "bonferroni")
+pairwise.wilcox.test(Biofilm_16S@sam_data$Shannon, Biofilm_16S@sam_data$pH.treatment, p.adjust.method = "bonferroni")
+pairwise.wilcox.test(Biofilm_16S@sam_data$Pielou, Biofilm_16S@sam_data$pH.treatment, p.adjust.method = "bonferroni")
+
+```
+###With ambient
+```{r KW Age}
+
+####16S####
+pairwise.wilcox.test(Nad_phyloseq_16S@sam_data$Observed, Nad_phyloseq_16S@sam_data$age.slide..months., p.adjust.method = "bonferroni")
+pairwise.wilcox.test(Nad_phyloseq_16S@sam_data$Shannon, Nad_phyloseq_16S@sam_data$age.slide..months., p.adjust.method = "bonferroni")
+pairwise.wilcox.test(Nad_phyloseq_16S@sam_data$Pielou, Nad_phyloseq_16S@sam_data$age.slide..months., p.adjust.method = "bonferroni")
+#Nothing is significant
+
+```
+```{r KW pH}
+####16S####
+pairwise.wilcox.test(Nad_phyloseq_16S@sam_data$Observed, Nad_phyloseq_16S@sam_data$pH.treatment, p.adjust.method = "bonferroni")
+pairwise.wilcox.test(Nad_phyloseq_16S@sam_data$Shannon, Nad_phyloseq_16S@sam_data$pH.treatment, p.adjust.method = "bonferroni")
+pairwise.wilcox.test(Nad_phyloseq_16S@sam_data$Pielou, Nad_phyloseq_16S@sam_data$pH.treatment, p.adjust.method = "bonferroni")
+#Nothing is significant
+
+```
+##Post-hoc for NMDS - adonis based
+library(RVAideMemoire)
+```{r 16S NMDS derived stat tests - age}
+
+####16S####
+Age_group = get_variable(Biofilm_16S@sam_data, "age.slide..months.")
+df_tran.dist = phyloseq::distance(Biofilm_16S, method = "bray")
+Depth_ado = pairwise.perm.manova(df_tran.dist, Age_group, nperm = 999)
+Depth_ado
+#No significant differences between group means
+
+pH_group = get_variable(Biofilm_16S@sam_data, "pH.treatment")
+df_tran.dist = phyloseq::distance(Biofilm_16S, method = "bray")
+pH_ado = pairwise.perm.manova(df_tran.dist, pH_group, nperm = 999)
+pH_ado
+#No significant differences between group means
+
+```
